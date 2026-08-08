@@ -1,0 +1,30 @@
+# Secrets — never commit
+.env
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Generated audio files
+audio/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Internal
+RINGSIDE_full_build_doc.md
+skills-lock.json
+preflight.js
+test-negotiate.js
+test-tts.js
+check-*.js
+list-*.js
+
+# Claude/agent internals
+.agents/
+.claude/

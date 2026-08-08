@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ringside — Live Call</title>
+<style>
+/* ── TT Norms Pro ── */
+@font-face {
+  font-family: 'TT Norms Pro';
+  src: url('/fonts/tt-norms-pro-regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'TT Norms Pro';
+  src: url('/fonts/tt-norms-pro-semibold.woff2') format('woff2');
+  font-weight: 500 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ── Tokens ── */
+:root {
+  --bg:          #F5F5F5;
+  --bg-card:     #FFFFFF;
+  --bg-card-2:   #EFEFEF;
+  --border:      #E5E5E5;
+  --border-hi:   #D0D0D0;
+
+  --text-1: #111111;
+  --text-2: #555555;
+  --text-3: #999999;
+
+  --black:   #000000;
+  --green:   #16a34a;
+  --green-bg: rgba(22,163,74,.08);
+  --green-bdr:rgba(22,163,74,.2);
+  --red:     #dc2626;
+  --red-bg:  rgba(220,38,38,.07);
+  --red-bdr: rgba(220,38,38,.18);
+  --amber:   #d97706;
+
+  --r:    12px;
+  --r-sm: 8px;
+  --r-lg: 20px;
+  --r-pill: 999px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%;
+  font-family: 'TT Norms Pro', system-ui, ui-sans-serif, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: var(--bg);
+  color: var(--text-1);
+  overflow-x: hidden;
+}
+
+/* ── Views ── */
+.view { display: none; min-height: 100dvh; flex-direction: column; }
+.view.on { display: flex; }
+
+/* ===========================================
+   NAVBAR (shared)
+   =========================================== */
+.navbar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 20;
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 1408px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.navbar-inner {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+.nav-logo {
+  width: 28px;
+  height: 28px;
+  color: #000;
+}
+.nav-wordmark {
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  color: #000;
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  list-style: none;
+}
+.nav-links a {
+  font-size: 15px;
+  font-weight: 500;
+  color: #555;
+  text-decoration: none;
+  transition: color .2s;
+}
+.nav-links a:hover { color: #000; }
+
+.nav-cta {
+  background: #000;
+  color: #fff;
+  border: none;
+  border-radius: var(--r-pill);
+  padding: 10px 28px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .2s;
+}
+.nav-cta:hover { background: #222; }
+
+/* ===========================================
+   PRE-CALL LANDING VIEW
+   =========================================== */
+#land {
+  background: var(--bg);
+  position: relative;
+  overflow: hidden;
+  align-items: stretch;
+  padding: 96px 24px 48px;
+  gap: 0;
+}
+
+.land-inner {
+  max-width: 1120px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 64px;
+  flex: 1;
+  width: 100%;
+}
+
+/* Left copy */
+.land-left { flex: 0 0 48%; }
+
+.land-eyebrow {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 20px;
+}
+
+.land-h1 {
+  font-size: 52px;
+  font-weight: 500;
+  line-height: 1.04;
+  letter-spacing: -0.04em;
+  color: var(--text-1);
+  margin-bottom: 20px;
+  max-width: 420px;
+}
+
+.land-sub {
+  font-size: 17px;
+  line-height: 1.65;
+  color: var(--text-2);
+  max-width: 360px;
+  margin-bottom: 40px;
+}
+
+/* Pill CTA */
+.pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--black);
+  color: #fff;
+  border: none;
+  border-radius: var(--r-pill);
+  padding: 8px 8px 8px 32px;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .2s;
+}
+.pill-btn:hover { background: #222; }
+.pill-btn .arrow-circle {
+  width: 36px; height: 36px;
+  background: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.pill-btn .arrow-circle svg {
+  width: 16px; height: 16px;
+  color: #000;
+}
+
+/* Right scenario card */
+.land-right { flex: 1; }
+
+.scard {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 28px 30px;
+}
+
+.scard-lbl {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 20px;
+}
+
+.price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 24px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--border);
+}
+.p-from {
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--red);
+  letter-spacing: -0.03em;
+  text-decoration: line-through;
+  text-decoration-color: rgba(220,38,38,.4);
+}
+.p-arr { font-size: 16px; color: var(--text-3); margin: 0 4px; }
+.p-to { display: flex; flex-direction: column; gap: 2px; }
+.p-target {
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--green);
+  letter-spacing: -0.03em;
+}
+.p-target-lbl {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  color: var(--text-3);
+}
+
+.levers-lbl {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 12px;
+}
+
+.lever {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.lever:last-of-type { border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+.lever-n {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-3);
+  flex-shrink: 0;
+  min-width: 16px;
+  padding-top: 1px;
+}
+.lever-t { font-size: 14px; color: var(--text-2); line-height: 1.45; }
+
+.win-row {
+  background: var(--green-bg);
+  border: 1px solid var(--green-bdr);
+  border-radius: var(--r-sm);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.win-lbl {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  color: var(--green);
+}
+.win-nums { display: flex; gap: 20px; }
+.win-stat { text-align: right; }
+.win-val {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--green);
+  letter-spacing: -0.02em;
+  display: block;
+}
+.win-unit {
+  font-size: 10px;
+  font-weight: 500;
+  color: rgba(22,163,74,.55);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+/* ===========================================
+   DASHBOARD VIEW
+   =========================================== */
+#dash { background: var(--bg); }
+
+/* Top call bar */
+.cbar {
+  height: 60px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 32px;
+  background: var(--bg-card);
+  flex-shrink: 0;
+  gap: 0;
+}
+
+.cparty { display: flex; align-items: center; gap: 12px; }
+
+.cavatar {
+  width: 34px; height: 34px;
+  border-radius: var(--r-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  flex-shrink: 0;
+  transition: box-shadow .3s ease;
+}
+.cav-r {
+  background: rgba(0,0,0,.06);
+  border: 1px solid rgba(0,0,0,.12);
+  color: #111;
+}
+.cav-s {
+  background: var(--red-bg);
+  border: 1px solid var(--red-bdr);
+  color: var(--red);
+}
+
+.cavatar.speaking-r {
+  box-shadow: 0 0 0 2px rgba(0,0,0,.25), 0 0 10px rgba(0,0,0,.1);
+}
+.cavatar.speaking-s {
+  box-shadow: 0 0 0 2px rgba(220,38,38,.35), 0 0 10px rgba(220,38,38,.12);
+}
+
+.cparty-info { display: flex; flex-direction: column; gap: 2px; }
+.cparty-name { font-size: 13px; font-weight: 500; color: var(--text-1); }
+.cparty-st {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--text-3);
+  transition: color .3s ease;
+}
+.cparty-st.st-active { color: var(--green); }
+.cparty-st.st-r      { color: #111; }
+.cparty-st.st-s      { color: var(--red); }
+
+.cconnector {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+.cline {
+  height: 1px;
+  width: 64px;
+  background: var(--border-hi);
+  position: relative;
+  overflow: hidden;
+}
+.cline.live::after {
+  content: '';
+  position: absolute;
+  top: 0; left: -100%;
+  width: 50%; height: 100%;
+  background: linear-gradient(90deg, transparent, var(--green), transparent);
+  animation: cflow 1.6s ease-in-out infinite;
+}
+@keyframes cflow { to { left: 200%; } }
+
+.cbadge {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 4px 14px;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-pill);
+  transition: all .4s ease;
+  white-space: nowrap;
+}
+.cbadge.live {
+  color: var(--green);
+  border-color: var(--green-bdr);
+  background: var(--green-bg);
+}
+
+.ldot {
+  display: inline-block;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.cbadge.live .ldot { animation: lp 1.5s ease-in-out infinite; }
+@keyframes lp { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+
+/* Dashboard body grid */
+.dbody {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  overflow: hidden;
+}
+
+/* Offer panel */
+.opanel {
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 32px;
+  overflow-y: auto;
+  background: var(--bg-card);
+}
+
+.panel-lbl {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 14px;
+}
+
+.offer-num {
+  font-size: 72px;
+  font-weight: 600;
+  letter-spacing: -0.05em;
+  line-height: 1;
+  color: var(--text-1);
+  transition: color .6s ease;
+}
+.offer-num.dropping { color: var(--amber); }
+.offer-num.win      { color: var(--green); }
+
+.offer-sfx {
+  font-size: 18px;
+  font-weight: 400;
+  color: var(--text-3);
+  margin-left: 4px;
+}
+
+.offer-delta {
+  font-size: 13px;
+  color: var(--text-3);
+  margin-top: 8px;
+  margin-bottom: 32px;
+  min-height: 18px;
+  transition: color .4s ease;
+}
+.offer-delta.hi { color: var(--green); }
+
+/* Savings block */
+.savings {
+  border-top: 1px solid var(--border);
+  padding-top: 24px;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity .5s ease, transform .5s ease;
+}
+.savings.on { opacity: 1; transform: translateY(0); }
+
+.srow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 10px 0;
+}
+.srow + .srow { border-top: 1px solid var(--border); }
+.speriod { font-size: 13px; color: var(--text-2); }
+.samount {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--green);
+  letter-spacing: -0.03em;
+}
+
+/* Resolution card */
+.rcard {
+  margin-top: 20px;
+  background: var(--green-bg);
+  border: 1px solid var(--green-bdr);
+  border-radius: var(--r);
+  padding: 16px 18px;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity .5s ease .25s, transform .5s ease .25s;
+}
+.rcard.on { opacity: 1; transform: translateY(0); }
+.rcard-title {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--green);
+  margin-bottom: 6px;
+}
+.rcard-body { font-size: 14px; color: var(--text-2); line-height: 1.55; }
+
+/* Transcript panel */
+.tpanel { display: flex; flex-direction: column; overflow: hidden; }
+
+.thead {
+  padding: 18px 28px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  background: var(--bg-card);
+}
+.thead-lbl {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.tcounter { font-size: 12px; color: var(--text-3); }
+
+.tfeed {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  scroll-behavior: smooth;
+  background: var(--bg);
+}
+.tfeed::-webkit-scrollbar { width: 4px; }
+.tfeed::-webkit-scrollbar-track { background: transparent; }
+.tfeed::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 4px; }
+
+/* Turn items */
+.turn {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  opacity: 0;
+  transform: translateY(8px);
+  animation: trev .35s cubic-bezier(.16,1,.3,1) forwards;
+}
+@keyframes trev { to { opacity: 1; transform: translateY(0); } }
+
+.tav {
+  width: 34px; height: 34px;
+  border-radius: var(--r-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.tav-r {
+  background: rgba(0,0,0,.07);
+  border: 1px solid rgba(0,0,0,.12);
+  color: #111;
+}
+.tav-s {
+  background: var(--red-bg);
+  border: 1px solid var(--red-bdr);
+  color: var(--red);
+}
+
+.turn-body {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 12px 16px;
+  flex: 1;
+}
+
+.tspk {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  margin-bottom: 5px;
+}
+.tspk-r { color: #111; }
+.tspk-s { color: var(--red); }
+
+.ttext { font-size: 14px; line-height: 1.6; color: var(--text-1); }
+
+.tbadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  font-weight: 500;
+}
+.tbadge-drop {
+  background: rgba(217,119,6,.08);
+  color: var(--amber);
+  border: 1px solid rgba(217,119,6,.22);
+}
+.tbadge-win {
+  background: var(--green-bg);
+  color: var(--green);
+  border: 1px solid var(--green-bdr);
+}
+
+/* Waiting dots */
+.wrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  opacity: .5;
+  padding: 6px 0;
+}
+.wdots { display: flex; gap: 4px; }
+.wdots span {
+  width: 4px; height: 4px;
+  border-radius: 50%;
+  background: var(--text-3);
+  animation: wd 1.2s ease-in-out infinite;
+}
+.wdots span:nth-child(2) { animation-delay: .2s; }
+.wdots span:nth-child(3) { animation-delay: .4s; }
+@keyframes wd {
+  0%, 80%, 100% { opacity: .3; transform: scale(.8); }
+  40%           { opacity: 1;  transform: scale(1.2); }
+}
+.wtxt { font-size: 11px; color: var(--text-3); font-weight: 500; letter-spacing: .04em; }
+
+/* Number slam animation */
+@keyframes numslam {
+  0%   { transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
+.slam { animation: numslam .28s cubic-bezier(.16,1,.3,1); }
+
+/* ── Dash navbar (inline, not absolute) ── */
+.dash-nav {
+  height: 60px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  display: flex;
+  align-items: center;
+  padding: 0 32px;
+  flex-shrink: 0;
+}
+.dash-nav .nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+.dash-nav .nav-wordmark {
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  color: #000;
+}
+.dash-nav .nav-logo { width: 24px; height: 24px; color: #000; }
+</style>
+</head>
+<body>
+
+<!-- =============================================
+     PRE-CALL LANDING VIEW
+     ============================================= -->
+<div class="view on" id="land">
+
+  <!-- Navbar (absolute over landing) -->
+  <nav style="position:absolute;top:0;left:0;right:0;z-index:20;padding:20px 24px;display:flex;align-items:center;justify-content:space-between;">
+    <a class="nav-brand" href="/">
+      <svg class="nav-logo" viewBox="0 0 256 256" fill="currentColor">
+        <path d="M 128.005 191.173 C 128.448 156.208 156.93 128 192 128 L 192 64 L 128 64 C 128 99.346 99.346 128 64 128 L 64 192 L 128 192 Z M 192 256 L 64 256 C 28.654 256 0 227.346 0 192 L 0 64 L 64 64 L 64 0 L 192 0 C 227.346 0 256 28.654 256 64 L 256 192 L 192 192 Z"/>
+      </svg>
+      <span class="nav-wordmark">Ringside</span>
+    </a>
+    <nav style="display:flex;align-items:center;gap:28px;">
+      <a href="#" style="font-size:15px;font-weight:500;color:#555;text-decoration:none;">How it works</a>
+      <a href="#" style="font-size:15px;font-weight:500;color:#555;text-decoration:none;">Pricing</a>
+      <a href="#" style="font-size:15px;font-weight:500;color:#555;text-decoration:none;">Docs</a>
+    </nav>
+    <button class="nav-cta" onclick="startDash()">Start a Call</button>
+  </nav>
+
+  <!-- Content -->
+  <div class="land-inner">
+
+    <!-- Left -->
+    <div class="land-left">
+      <div class="land-eyebrow">Live demo</div>
+
+      <h1 class="land-h1">
+        Your Voice<br>Wins.
+      </h1>
+
+      <p class="land-sub">
+        Watch Ringside place a real call, adapt live, and land the number it came for — whether the other side is human or AI.
+      </p>
+
+      <button class="pill-btn" onclick="startDash()">
+        Place Call
+        <span class="arrow-circle">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14M12 5l7 7-7 7"/>
+          </svg>
+        </span>
+      </button>
+    </div>
+
+    <!-- Right: scenario card -->
+    <div class="land-right">
+      <div class="scard">
+        <div class="scard-lbl">Scenario</div>
+
+        <div class="price-row">
+          <span class="p-from">&#8377;1,499</span>
+          <span class="p-arr">&#8594;</span>
+          <div class="p-to">
+            <span class="p-target">&#8377;999</span>
+            <span class="p-target-lbl">target / mo</span>
+          </div>
+        </div>
+
+        <div class="levers-lbl">Ringside's Levers</div>
+
+        <div class="lever">
+          <span class="lever-n">1</span>
+          <span class="lever-t">14 months on this plan, zero missed payments</span>
+        </div>
+        <div class="lever">
+          <span class="lever-n">2</span>
+          <span class="lever-t">Competitor offering &#8377;950 for equivalent speed</span>
+        </div>
+        <div class="lever">
+          <span class="lever-n">3</span>
+          <span class="lever-t">Transfer to retention, or cancel the line today</span>
+        </div>
+
+        <div class="win-row">
+          <span class="win-lbl">Expected win</span>
+          <div class="win-nums">
+            <div class="win-stat">
+              <span class="win-val">&#8377;1,020</span>
+              <span class="win-unit">per month</span>
+            </div>
+            <div class="win-stat">
+              <span class="win-val">&#8377;5,748</span>
+              <span class="win-unit">per year</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- =============================================
+     DASHBOARD VIEW
+     ============================================= -->
+<div class="view" id="dash">
+
+  <!-- Inline navbar -->
+  <div class="dash-nav">
+    <a class="nav-brand" href="/">
+      <svg class="nav-logo" viewBox="0 0 256 256" fill="currentColor">
+        <path d="M 128.005 191.173 C 128.448 156.208 156.93 128 192 128 L 192 64 L 128 64 C 128 99.346 99.346 128 64 128 L 64 192 L 128 192 Z M 192 256 L 64 256 C 28.654 256 0 227.346 0 192 L 0 64 L 64 64 L 64 0 L 192 0 C 227.346 0 256 28.654 256 64 L 256 192 L 192 192 Z"/>
+      </svg>
+      <span class="nav-wordmark">Ringside</span>
+    </a>
+  </div>
+
+  <!-- Call bar -->
+  <div class="cbar">
+    <div class="cparty">
+      <div class="cavatar cav-r" id="avR">R</div>
+      <div class="cparty-info">
+        <span class="cparty-name">Ringside</span>
+        <span class="cparty-st" id="stR">Ready</span>
+      </div>
+    </div>
+
+    <div class="cconnector">
+      <div class="cline" id="cl1"></div>
+      <div class="cbadge" id="badge"><span class="ldot"></span>Idle</div>
+      <div class="cline" id="cl2"></div>
+    </div>
+
+    <div class="cparty" style="flex-direction:row-reverse">
+      <div class="cavatar cav-s" id="avS">SR</div>
+      <div class="cparty-info" style="text-align:right">
+        <span class="cparty-name">Stubborn Rep</span>
+        <span class="cparty-st" id="stS">Ready</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Body -->
+  <div class="dbody">
+
+    <!-- Left: offer panel -->
+    <div class="opanel">
+      <div class="panel-lbl">Current Offer</div>
+      <div>
+        <span class="offer-num" id="onum">&#8377;1,499</span><span class="offer-sfx">/mo</span>
+      </div>
+      <div class="offer-delta" id="odelta">Awaiting connection</div>
+
+      <div class="savings" id="savings">
+        <div class="panel-lbl">Projected Savings</div>
+        <div class="srow">
+          <span class="speriod">Per month</span>
+          <span class="samount" id="smo">&#8377;0</span>
+        </div>
+        <div class="srow">
+          <span class="speriod">Per year</span>
+          <span class="samount" id="syr">&#8377;0</span>
+        </div>
+      </div>
+
+      <div class="rcard" id="rcard">
+        <div class="rcard-title">Negotiation Complete</div>
+        <div class="rcard-body" id="rbody">
+          Saved &#8377;479/month. &#8377;5,748/year. Rate locked for 6 months.
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: transcript -->
+    <div class="tpanel">
+      <div class="thead">
+        <span class="thead-lbl">Live Transcript</span>
+        <span class="tcounter" id="tcnt">0 / 7</span>
+      </div>
+      <div class="tfeed" id="feed"></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// =============================================================
+//  MOCK DATA SOURCE
+//  Single point of replacement: swap startSim() for real SSE.
+//  Callback contract must be preserved.
+// =============================================================
+
+const TURNS = [
+  {
+    speaker:'ringside', action:'open', currentOffer:1499, delay:3600,
+    text:"Hi, I'm calling about my internet account ending in 4482. I'd like to bring my monthly rate down from 1,499 to 999 rupees per month.",
+  },
+  {
+    speaker:'rep', action:'offer_1349', currentOffer:1349, delay:11200,
+    text:"I understand your concern, but this plan is already at a discounted rate. The best I can offer today is 1,349 rupees per month.",
+  },
+  {
+    speaker:'ringside', action:'lever_loyalty_competitor', currentOffer:1349, delay:18800,
+    text:"I've been on this plan 14 months with no missed payments, and a competitor is offering 950 rupees for the same speed. Can you match closer to 999?",
+  },
+  {
+    speaker:'rep', action:'hold_firm', currentOffer:1349, delay:26500,
+    text:"I appreciate your loyalty, but 1,349 rupees is the most flexibility I have right now.",
+  },
+  {
+    speaker:'ringside', action:'lever_escalate', currentOffer:1349, delay:33800,
+    text:"Then I need you to transfer me to your retention team, or I'll have to cancel this line today.",
+  },
+  {
+    speaker:'rep', action:'fold', currentOffer:1020, delay:42200,
+    text:"Let me apply a loyalty adjustment for you. That brings it to 1,020 rupees a month, locked in for 6 months.",
+  },
+  {
+    speaker:'ringside', action:'accept', currentOffer:1020, delay:50000,
+    text:"That works. Please confirm the rate change is applied to my account.",
+  },
+];
+
+const CALL_PHASES = [
+  { delay:0,    rSt:'Dialing',   sSt:'Ringing',   badge:'Connecting', live:false },
+  { delay:1800, rSt:'Ringing',   sSt:'Ringing',   badge:'Ringing',    live:false },
+  { delay:3200, rSt:'Connected', sSt:'Connected', badge:'Live',       live:true  },
+];
+
+function startSim({ onPhase, onTurn, onResolved }) {
+  const ts = [];
+  CALL_PHASES.forEach(p => ts.push(setTimeout(() => onPhase(p), p.delay)));
+  TURNS.forEach((t, i) => ts.push(setTimeout(() => onTurn({ ...t, index: i }), t.delay)));
+  ts.push(setTimeout(() => onResolved({ finalPrice:1020, savings:479, savingsAnnual:5748 }), 57000));
+  return () => ts.forEach(clearTimeout);
+}
+
+// =============================================================
+//  UI
+// =============================================================
+
+let cancel = null;
+let offerVal = 1499;
+let turnsDone = 0;
+
+function startDash() {
+  document.getElementById('land').classList.remove('on');
+  document.getElementById('dash').classList.add('on');
+  initDash();
+}
+
+function initDash() {
+  if (cancel) cancel();
+  offerVal = 1499; turnsDone = 0;
+
+  setNum(1499, false);
+  setDelta('Awaiting connection', false);
+  document.getElementById('feed').innerHTML = '';
+  document.getElementById('tcnt').textContent = '0 / 7';
+  document.getElementById('savings').classList.remove('on');
+  document.getElementById('rcard').classList.remove('on');
+  setPhase({ rSt:'Ready', sSt:'Ready', badge:'Idle', live:false });
+
+  cancel = startSim({ onPhase: applyPhase, onTurn: applyTurn, onResolved: applyResolved });
+}
+
+// ── PHASE ──
+function applyPhase(p) {
+  const stR = document.getElementById('stR');
+  const stS = document.getElementById('stS');
+  stR.textContent = p.rSt;
+  stR.className = 'cparty-st' + (p.live ? ' st-active' : '');
+  stS.textContent = p.sSt;
+  stS.className = 'cparty-st' + (p.live ? ' st-active' : '');
+
+  const b = document.getElementById('badge');
+  b.innerHTML = '<span class="ldot"></span>' + p.badge;
+  b.className = 'cbadge' + (p.live ? ' live' : '');
+
+  document.getElementById('cl1').className = 'cline' + (p.live ? ' live' : '');
+  document.getElementById('cl2').className = 'cline' + (p.live ? ' live' : '');
+
+  if (p.live) setDelta('Negotiation in progress', false);
+  else if (p.badge === 'Connecting') setDelta('Placing call...', false);
+}
+
+function setPhase(p) { applyPhase(p); }
+
+// ── SPEAKING INDICATOR ──
+function setSpeaking(sp) {
+  document.getElementById('avR').className = 'cavatar cav-r' + (sp === 'ringside' ? ' speaking-r' : '');
+  document.getElementById('avS').className = 'cavatar cav-s' + (sp === 'rep' ? ' speaking-s' : '');
+
+  const rSt = document.getElementById('stR');
+  const sSt = document.getElementById('stS');
+
+  if (sp === 'ringside') {
+    rSt.className = 'cparty-st st-r'; rSt.textContent = 'Speaking';
+    sSt.className = 'cparty-st';      sSt.textContent = 'Listening';
+  } else if (sp === 'rep') {
+    sSt.className = 'cparty-st st-s'; sSt.textContent = 'Speaking';
+    rSt.className = 'cparty-st';      rSt.textContent = 'Listening';
+  } else {
+    rSt.className = 'cparty-st st-active'; rSt.textContent = 'Done';
+    sSt.className = 'cparty-st st-active'; sSt.textContent = 'Done';
+  }
+}
+
+// ── OFFER NUMBER ──
+function setNum(target, animate) {
+  const el = document.getElementById('onum');
+  if (!animate || target === offerVal) {
+    el.textContent = fmt(target);
+    el.className = 'offer-num' + stateClass(target);
+    offerVal = target;
+    return;
+  }
+  const from = offerVal;
+  const dur = 900;
+  const t0 = performance.now();
+  function step(now) {
+    const p = Math.min((now - t0) / dur, 1);
+    const e = 1 - Math.pow(1 - p, 3);
+    el.textContent = fmt(Math.round(from + (target - from) * e));
+    if (p < 1) { requestAnimationFrame(step); return; }
+    el.textContent = fmt(target);
+    el.className = 'offer-num slam' + stateClass(target);
+    setTimeout(() => el.classList.remove('slam'), 350);
+  }
+  offerVal = target;
+  requestAnimationFrame(step);
+}
+
+function stateClass(v) {
+  if (v <= 1020) return ' win';
+  if (v < 1499)  return ' dropping';
+  return '';
+}
+
+function fmt(v) { return '\u20B9' + v.toLocaleString('en-IN'); }
+
+function setDelta(txt, hi) {
+  const el = document.getElementById('odelta');
+  el.textContent = txt;
+  el.className = 'offer-delta' + (hi ? ' hi' : '');
+}
+
+// ── TURN ──
+function applyTurn(t) {
+  turnsDone++;
+  setSpeaking(t.speaker);
+
+  if (t.currentOffer !== offerVal) {
+    setNum(t.currentOffer, true);
+    const saved = 1499 - t.currentOffer;
+    setDelta('Down \u20B9' + saved.toLocaleString('en-IN') + ' from \u20B91,499', true);
+    document.getElementById('smo').textContent = fmt(saved);
+    document.getElementById('syr').textContent = fmt(saved * 12);
+    document.getElementById('savings').classList.add('on');
+  }
+
+  document.getElementById('tcnt').textContent = turnsDone + ' / 7';
+
+  // Remove waiting indicator
+  const w = document.getElementById('feed').querySelector('.wrow');
+  if (w) w.remove();
+
+  const isR = t.speaker === 'ringside';
+  const badge =
+    t.action === 'offer_1349' ? '<div class="tbadge tbadge-drop">New offer: \u20B91,349/mo</div>' :
+    t.action === 'fold'       ? '<div class="tbadge tbadge-win">Locked in: \u20B91,020/mo \xB7 6 months</div>' : '';
+
+  const el = document.createElement('div');
+  el.className = 'turn';
+  el.innerHTML =
+    '<div class="tav ' + (isR ? 'tav-r' : 'tav-s') + '">' + (isR ? 'R' : 'SR') + '</div>' +
+    '<div class="turn-body">' +
+      '<div class="tspk ' + (isR ? 'tspk-r' : 'tspk-s') + '">' + (isR ? 'Ringside' : 'Stubborn Rep') + '</div>' +
+      '<div class="ttext">' + t.text + '</div>' +
+      badge +
+    '</div>';
+
+  document.getElementById('feed').appendChild(el);
+
+  if (turnsDone < 7) {
+    const w2 = document.createElement('div');
+    w2.className = 'wrow';
+    w2.innerHTML = '<div class="wdots"><span></span><span></span><span></span></div><span class="wtxt">Waiting for response</span>';
+    document.getElementById('feed').appendChild(w2);
+  }
+
+  setTimeout(() => {
+    const f = document.getElementById('feed');
+    f.scrollTop = f.scrollHeight;
+  }, 50);
+}
+
+// ── RESOLVED ──
+function applyResolved(r) {
+  setSpeaking(null);
+  setNum(r.finalPrice, false);
+  setDelta('Negotiation complete', true);
+  document.getElementById('feed').querySelector('.wrow')?.remove();
+  document.getElementById('rcard').classList.add('on');
+
+  const b = document.getElementById('badge');
+  b.innerHTML = '<span class="ldot"></span>Complete';
+  b.className = 'cbadge live';
+}
+</script>
+</body>
+</html>

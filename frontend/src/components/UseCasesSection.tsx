@@ -1,0 +1,60 @@
+import { ArrowRight } from 'lucide-react'
+
+const USE_CASES_VIDEO =
+  'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260423_183428_ab5e672a-f608-4dcb-b319-f3e040f02e2d.mp4'
+
+export default function UseCasesSection() {
+  return (
+    <section className="bg-[#F5F5F5] px-6 py-24">
+      <div className="max-w-[88rem] mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
+        {/* Left column */}
+        <div className="md:pr-12 md:pt-2">
+          <p className="text-black/60 text-sm mb-2">Ringside in Practice</p>
+          <h2
+            className="text-5xl md:text-6xl font-medium leading-none mb-6"
+            style={{ letterSpacing: '-0.04em' }}
+          >
+            Use cases
+          </h2>
+          <p className="text-black/60 text-base leading-relaxed max-w-sm">
+            Ringside handles the calls you'd rather not make — negotiating bills, subscriptions, and retention pitches on your behalf, live and unscripted.
+          </p>
+        </div>
+
+        {/* Right column: video card */}
+        <div className="relative rounded-3xl overflow-hidden min-h-[720px]">
+          <video
+            autoPlay
+            muted
+            loop
+            playsInline
+            className="absolute inset-0 w-full h-full object-cover"
+            src={USE_CASES_VIDEO}
+          />
+          <div className="relative z-10 p-10 md:p-12 flex flex-col h-full min-h-[720px]">
+            <div className="mt-auto">
+              <h3
+                className="text-4xl md:text-5xl font-medium leading-tight mb-5"
+                style={{ letterSpacing: '-0.03em' }}
+              >
+                Retention calls
+              </h3>
+              <p className="text-black/70 text-base max-w-md mb-8">
+                Send Ringside after your internet, phone, or subscription bill. It holds firm through the pushback and doesn't hang up until it wins.
+              </p>
+              <a
+                href="#"
+                className="group inline-flex items-center gap-3 text-black font-medium text-base"
+              >
+                <span className="w-9 h-9 rounded-full bg-white/80 backdrop-blur flex items-center justify-center group-hover:bg-white transition-colors">
+                  <ArrowRight className="w-4 h-4 text-black" />
+                </span>
+                Learn more
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
