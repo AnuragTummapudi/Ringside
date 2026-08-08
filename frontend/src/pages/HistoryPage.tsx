@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ArrowRight, Bot, Phone, CheckCircle, Clock, TrendingDown } from 'lucide-react'
 import LogoIcon from '../components/LogoIcon'
+import { API_BASE } from '../api'
 
 interface CallSummary {
   callId: string
@@ -21,14 +22,14 @@ export default function HistoryPage() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    fetch('/api/calls')
+    fetch(`${API_BASE}/api/calls`)
       .then((r) => r.json())
       .then((data) => { setCalls(data); setLoading(false) })
       .catch(() => setLoading(false))
 
     // Refresh every 5s for live updates
     const id = setInterval(() => {
-      fetch('/api/calls').then((r) => r.json()).then(setCalls).catch(() => {})
+      fetch(`${API_BASE}/api/calls`).then((r) => r.json()).then(setCalls).catch(() => {})
     }, 5000)
     return () => clearInterval(id)
   }, [])

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { ArrowRight, Bot, Phone } from 'lucide-react'
 import LogoIcon from '../components/LogoIcon'
+import { API_BASE } from '../api'
 
 interface TurnEvent {
   callId: string
@@ -90,7 +91,7 @@ export default function CallDashboardPage() {
   // Load initial state (handles page reload mid-call or after completion)
   useEffect(() => {
     if (!callId) return
-    fetch(`/api/state/${callId}`)
+    fetch(`${API_BASE}/api/state/${callId}`)
       .then((r) => r.json())
       .then((s: CallState) => {
         setCallState(s)
@@ -130,7 +131,7 @@ export default function CallDashboardPage() {
   // SSE — real-time events from backend
   useEffect(() => {
     if (!callId) return
-    const es = new EventSource('/api/events')
+    const es = new EventSource(`${API_BASE}/api/events`)
 
     es.addEventListener('call_preparing', (e) => {
       const d = JSON.parse(e.data)

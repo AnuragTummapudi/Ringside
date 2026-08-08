@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { ArrowRight, ArrowLeft, Bot, Phone } from 'lucide-react'
 import LogoIcon from '../components/LogoIcon'
+import { API_BASE } from '../api'
 
 interface FormState {
   company: string
@@ -66,7 +67,7 @@ export default function NewNegotiationPage() {
     setError(null)
 
     try {
-      const resp = await fetch('/api/call/start', {
+      const resp = await fetch(`${API_BASE}/api/call/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
