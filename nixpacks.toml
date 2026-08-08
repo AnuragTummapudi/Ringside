@@ -1,2 +1,2 @@
 [phases.setup]
-nixPkgs = ["ffmpeg"]
+nixPkgs = ["nodejs_20", "npm-9_x", "ffmpeg"]
