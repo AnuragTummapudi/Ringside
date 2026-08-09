@@ -4,8 +4,10 @@ import HeroSection from '../components/HeroSection'
 import StatsSection from '../components/StatsSection'
 import InfoSection from '../components/InfoSection'
 import HowItWorksSection from '../components/HowItWorksSection'
+import NegotiationExampleSection from '../components/NegotiationExampleSection'
+import LandingUseCasesSection from '../components/LandingUseCasesSection'
+import TrustSection from '../components/TrustSection'
 import BackedBySection from '../components/BackedBySection'
-import UseCasesSection from '../components/UseCasesSection'
 import FooterSection from '../components/FooterSection'
 
 export default function LandingPage() {
@@ -19,8 +21,10 @@ export default function LandingPage() {
       <StatsSection />
       <InfoSection />
       <HowItWorksSection />
+      <NegotiationExampleSection />
+      <LandingUseCasesSection />
+      <TrustSection />
       <BackedBySection />
-      <UseCasesSection />
       <FooterSection onCta={() => navigate('/new')} />
     </div>
   )

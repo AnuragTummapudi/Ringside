@@ -1,25 +1,27 @@
+import { MotionItem, Reveal, Stagger } from './Motion'
+
 const STEPS = [
   {
     n: '01',
     title: 'Set your target',
-    body: 'Tell Ringside your current bill and the price you want. It loads the right arguments before ever picking up the phone.',
+    body: 'Tell Ringside what you want, what you will accept, and anything that matters to the decision.',
   },
   {
     n: '02',
     title: 'Ringside calls',
-    body: 'A real call is placed. Ringside introduces itself, reads the rep\'s responses, and chooses the right lever at every turn.',
+    body: 'A real call is placed. Ringside reads the response, handles objections, and adjusts its approach as the call develops.',
   },
   {
     n: '03',
-    title: 'You save',
-    body: 'The call closes on your terms. No hold music. No scripts to babysit. Just a new rate, confirmed on the line.',
+    title: 'Review the outcome',
+    body: 'You receive a clear record of what was agreed, so you can decide what happens next with confidence.',
   },
 ]
 
 export default function HowItWorksSection() {
   return (
     <section className="bg-[#F5F5F5] px-6 py-24">
-      <div className="max-w-[88rem] mx-auto">
+      <Reveal className="max-w-[88rem] mx-auto">
 
         {/* Header row */}
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6 mb-16">
@@ -35,16 +37,15 @@ export default function HowItWorksSection() {
             </h2>
           </div>
           <p className="text-black/60 text-base leading-relaxed max-w-xs md:text-right">
-            From setup to savings in under two minutes. No account required for the demo.
+            From your target to a live conversation, Ringside keeps the negotiation grounded in what matters to you.
           </p>
         </div>
 
         {/* Steps grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Stagger className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {STEPS.map((step) => (
-            <div
-              key={step.n}
-              className="bg-white border border-[#E5E5E5] rounded-2xl p-8 flex flex-col justify-between min-h-64 relative overflow-hidden"
+            <MotionItem key={step.n}><div
+              className="interactive-card bg-white border border-[#E5E5E5] rounded-2xl p-8 flex flex-col justify-between min-h-64 relative overflow-hidden"
             >
               {/* Ghost step number */}
               <span
@@ -68,11 +69,11 @@ export default function HowItWorksSection() {
                 </h3>
                 <p className="text-black/60 text-base leading-relaxed">{step.body}</p>
               </div>
-            </div>
+            </div></MotionItem>
           ))}
-        </div>
+        </Stagger>
 
-      </div>
+      </Reveal>
     </section>
   )
 }

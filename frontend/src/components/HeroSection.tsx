@@ -5,35 +5,33 @@ interface HeroSectionProps {
 }
 
 const BRANDS = [
-  {
-    label: 'Twilio',
-    style: { fontFamily: 'Georgia, serif', fontWeight: 700, letterSpacing: '-0.02em', fontSize: '15px' },
-  },
-  {
-    label: 'ANTHROPIC',
-    style: { fontFamily: 'Arial, sans-serif', fontWeight: 900, letterSpacing: '0.08em', fontSize: '13px' },
-  },
-  {
-    label: 'Maya Research',
-    style: { fontFamily: "'Trebuchet MS', sans-serif", fontWeight: 600, letterSpacing: '0.01em', fontSize: '15px', fontStyle: 'italic' },
-  },
-  {
-    label: 'CLAUDE',
-    style: { fontFamily: "'Courier New', monospace", fontWeight: 700, letterSpacing: '0.12em', fontSize: '13px' },
-  },
-  {
-    label: 'Vercel',
-    style: { fontFamily: "'Palatino', 'Book Antiqua', serif", fontWeight: 400, letterSpacing: '-0.01em', fontSize: '16px' },
-  },
-  {
-    label: 'Ngrok',
-    style: { fontFamily: "'Impact', 'Arial Narrow', sans-serif", fontWeight: 400, letterSpacing: '0.04em', fontSize: '14px' },
-  },
-  {
-    label: 'Node.js',
-    style: { fontFamily: 'Verdana, sans-serif', fontWeight: 700, letterSpacing: '-0.03em', fontSize: '13px' },
-  },
+  'Anthropic',
+  'TWILIO',
+  'Maya Research',
+  'Claude',
+  'NGROK',
 ]
+
+function BrandMark({ brand }: { brand: string }) {
+  if (brand === 'Anthropic') {
+    return <img src="/brand/partners/anthropic.png" alt="Anthropic" className="w-[96px] h-auto" />
+  }
+  if (brand === 'TWILIO') {
+    return <img src="/brand/partners/twilio.png" alt="Twilio" className="w-[78px] h-auto" />
+  }
+  if (brand === 'Maya Research') {
+    return (
+      <span className="inline-flex items-center gap-2 whitespace-nowrap text-black">
+        <img src="/brand/partners/maya.png" alt="" className="w-5 h-5 object-contain" />
+        <span className="text-sm font-semibold tracking-[0.01em]">Maya Research</span>
+      </span>
+    )
+  }
+  if (brand === 'Claude') {
+    return <img src="/brand/partners/claude.png" alt="Claude" className="w-[90px] h-auto" />
+  }
+  return <span className="text-sm font-bold tracking-[0.06em] text-black">{brand}</span>
+}
 
 export default function HeroSection({ onCta }: HeroSectionProps) {
   return (
@@ -48,28 +46,28 @@ export default function HeroSection({ onCta }: HeroSectionProps) {
           muted
           loop
           playsInline
-          className="absolute inset-0 w-full h-full object-cover"
+          className="hero-video absolute inset-0 w-full h-full object-cover"
           src="/videos/lavender-icons-rising-loop-60fps.mp4"
         />
 
         {/* Content overlay */}
-        <div className="relative z-10 flex flex-col items-start justify-start h-full p-12 pt-36">
+        <div className="hero-copy relative z-10 flex flex-col items-start justify-start h-full p-12 pt-36">
           <h1
             className="text-black text-5xl md:text-6xl font-medium leading-tight max-w-xl mb-4"
             style={{ letterSpacing: '-0.04em' }}
           >
-            Your Voice<br />Wins
+            Negotiation,<br />represented.
           </h1>
 
           <p
             className="text-black/70 text-base md:text-lg max-w-md mb-8 leading-relaxed"
             style={{ fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif" }}
           >
-            An AI negotiation agent that calls, argues, and wins — built to hold its own whether the other side of the line is human or AI.
+            Ringside is an autonomous AI negotiation agent that represents you in real conversations, works within your limits, and pursues a better outcome.
           </p>
 
           {/* Get Started pill */}
-          <button onClick={onCta} className="inline-flex items-center gap-3 bg-black text-white text-base md:text-lg font-medium pl-8 pr-2 py-2 rounded-full hover:bg-gray-800 transition-colors duration-200">
+          <button onClick={onCta} className="interactive-cta inline-flex items-center gap-3 bg-black text-white text-base md:text-lg font-medium pl-8 pr-2 py-2 rounded-full">
             Get Started
             <span className="bg-white rounded-full p-2">
               <ArrowRight className="w-5 h-5 text-black" />
@@ -82,10 +80,9 @@ export default function HeroSection({ onCta }: HeroSectionProps) {
               {[...BRANDS, ...BRANDS].map((brand, i) => (
                 <span
                   key={i}
-                  className="mx-7 shrink-0 text-black/60 whitespace-nowrap"
-                  style={brand.style}
+                  className="mx-7 inline-flex h-8 shrink-0 items-center whitespace-nowrap"
                 >
-                  {brand.label}
+                  <BrandMark brand={brand} />
                 </span>
               ))}
             </div>

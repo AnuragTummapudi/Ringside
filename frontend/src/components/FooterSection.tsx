@@ -34,7 +34,7 @@ export default function FooterSection({ onCta }: { onCta?: () => void }) {
             </p>
           </div>
 
-          <button onClick={onCta} className="inline-flex items-center gap-3 bg-white text-black text-base font-medium pl-8 pr-2 py-2 rounded-full hover:bg-gray-100 transition-colors duration-200 self-start md:self-center">
+          <button onClick={onCta} className="interactive-cta inline-flex items-center gap-3 bg-white text-black text-base font-medium pl-8 pr-2 py-2 rounded-full self-start md:self-center">
             Start a Call
             <span className="bg-black rounded-full p-2">
               <ArrowRight className="w-5 h-5 text-white" />
@@ -44,8 +44,9 @@ export default function FooterSection({ onCta }: { onCta?: () => void }) {
       </section>
 
       {/* ── Footer ── */}
-      <footer className="bg-[#F5F5F5] border-t border-[#E5E5E5] px-6 py-16">
-        <div className="max-w-[88rem] mx-auto">
+      <footer className="relative isolate min-h-[440px] overflow-hidden border-t border-[#E5E5E5] bg-[#E7E5F0] px-6 py-16">
+        <div className="footer-scene-image absolute inset-0" aria-hidden="true" />
+        <div className="footer-content relative z-10 max-w-[88rem] mx-auto">
 
           {/* Top row: brand + nav cols */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-12 mb-16">
@@ -60,7 +61,7 @@ export default function FooterSection({ onCta }: { onCta?: () => void }) {
                   Ringside
                 </span>
               </div>
-              <p className="text-black/50 text-sm leading-relaxed max-w-[200px]">
+              <p className="text-black/75 text-sm leading-relaxed max-w-[200px]">
                 The AI that fights for you on the phone.
               </p>
             </div>
@@ -76,7 +77,7 @@ export default function FooterSection({ onCta }: { onCta?: () => void }) {
                     <li key={link}>
                       <a
                         href="#"
-                        className="text-black/50 text-sm hover:text-black transition-colors duration-200"
+                        className="text-black/75 text-sm hover:text-black transition-colors duration-200"
                       >
                         {link}
                       </a>
@@ -88,11 +89,11 @@ export default function FooterSection({ onCta }: { onCta?: () => void }) {
           </div>
 
           {/* Bottom bar */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pt-8 border-t border-[#E5E5E5]">
-            <p className="text-black/40 text-sm">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pt-8">
+            <p className="text-black/70 text-sm">
               &copy; 2026 Ringside. All rights reserved.
             </p>
-            <p className="text-black/30 text-xs">
+            <p className="text-black/70 text-xs">
               Built at Push to Prod &mdash; Anthropic &times; Elevation Capital, Bengaluru
             </p>
           </div>

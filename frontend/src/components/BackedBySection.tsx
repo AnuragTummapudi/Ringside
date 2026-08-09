@@ -1,4 +1,11 @@
-const BACKERS = [
+import type { CSSProperties } from 'react'
+
+type Backer = {
+  label: string
+  style?: CSSProperties
+}
+
+const BACKERS: Backer[] = [
   {
     label: 'Anthropic',
     style: { fontFamily: "'Times New Roman', serif", fontWeight: 400, letterSpacing: '0.02em', fontSize: '14px' },
@@ -16,22 +23,36 @@ const BACKERS = [
     style: { fontFamily: 'Georgia, serif', fontWeight: 600, letterSpacing: '-0.02em', fontSize: '17px' },
   },
   {
-    label: 'Vercel',
-    style: { fontFamily: 'Helvetica, sans-serif', fontWeight: 700, letterSpacing: '-0.01em', fontSize: '15px' },
-  },
-  {
     label: 'NGROK',
     style: { fontFamily: 'Verdana, sans-serif', fontWeight: 700, letterSpacing: '0.06em', fontSize: '14px', textTransform: 'uppercase' as const },
   },
-  {
-    label: 'NODE.JS',
-    style: { fontFamily: "'Courier New', monospace", fontWeight: 700, letterSpacing: '0.18em', fontSize: '14px' },
-  },
-  {
-    label: 'React',
-    style: { fontFamily: "'Palatino', serif", fontWeight: 500, letterSpacing: '0.03em', fontSize: '15px' },
-  },
 ]
+
+function MayaMark() {
+  return (
+    <span className="inline-flex items-center gap-2 whitespace-nowrap text-black">
+      <img src="/brand/partners/maya.png" alt="" className="w-6 h-6 object-contain" />
+      <span className="text-[16px] font-semibold tracking-[0.01em]">Maya Research</span>
+    </span>
+  )
+}
+
+function BackerMark({ backer }: { backer: Backer }) {
+  if (backer.label === 'Anthropic') {
+    return <img src="/brand/partners/anthropic.png" alt="Anthropic" className="w-[112px] h-auto" />
+  }
+  if (backer.label === 'TWILIO') {
+    return <img src="/brand/partners/twilio.png" alt="Twilio" className="w-[88px] h-auto" />
+  }
+  if (backer.label === 'Maya Research') {
+    return <MayaMark />
+  }
+  if (backer.label === 'Claude') {
+    return <img src="/brand/partners/claude.png" alt="Claude" className="w-[104px] h-auto" />
+  }
+
+  return <span style={backer.style}>{backer.label}</span>
+}
 
 export default function BackedBySection() {
   return (
@@ -48,10 +69,9 @@ export default function BackedBySection() {
             {[...BACKERS, ...BACKERS].map((backer, i) => (
               <span
                 key={i}
-                className="mx-10 shrink-0 text-black/50 whitespace-nowrap"
-                style={backer.style}
+                className="mx-10 inline-flex h-8 shrink-0 items-center text-black whitespace-nowrap"
               >
-                {backer.label}
+                <BackerMark backer={backer} />
               </span>
             ))}
           </div>
