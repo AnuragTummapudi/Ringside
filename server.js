@@ -664,9 +664,10 @@ app.post('/twiml/human-gather', requireTwilioSignature, async (req, res) => {
       const result = await runRingsideTurn(call.negotiationState, forcedAction);
       call.negotiationState = result.state;
 
-      const rTurnN    = call.audioFiles.length;
-      const audioFile = await generateAudio(result.text, 'ringside', rTurnN, callId, result.action);
-      call.audioFiles.push({ turn: rTurnN, speaker: 'ringside', text: result.text, action: result.action, file: audioFile });
+      const rTurnN = call.audioFiles.length;
+      // A Gather webhook has a tight response window. Dynamic TTS can add several
+      // seconds, so follow-up turns use Twilio's immediate speech synthesis.
+      call.audioFiles.push({ turn: rTurnN, speaker: 'ringside', text: result.text, action: result.action, file: null });
       call.currentTurn = rTurnN;
 
       emit('turn_playing', {
@@ -675,8 +676,7 @@ app.post('/twiml/human-gather', requireTwilioSignature, async (req, res) => {
         currentOffer: call.negotiationState.current_offer,
       });
 
-      const audioUrl = callAudioUrl(call, audioFile);
-      const media    = audioUrl ? `<Play>${audioUrl}</Play>` : `<Say>${escapeXml(result.text)}</Say>`;
+      const media = `<Say>${escapeXml(result.text)}</Say>`;
 
       if (call.negotiationState.resolved) {
         emit('call_resolved', {
