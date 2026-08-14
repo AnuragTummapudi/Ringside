@@ -27,7 +27,7 @@ function buildReport(call, research = null, bill = null) {
   const finalPrice = Number.isFinite(state.final_price) ? state.final_price : null;
   const savings = savingsFor(currentPrice, finalPrice);
   const verification = verifyFinalOffer({ finalPrice, targetPrice, currentPrice });
-  const policyAccepted = state.resolution_reason === 'accepted' && finalPrice <= (state.config?.acceptThreshold || targetPrice);
+  const policyAccepted = ['accepted', 'verbally_confirmed'].includes(state.resolution_reason) && finalPrice <= (state.config?.acceptThreshold || targetPrice);
   const outcome = verification.status === 'verified' && (verification.checks.belowTarget || policyAccepted) ? 'won' : finalPrice ? 'best_offer' : 'no_deal';
   return {
     outcome,
@@ -42,7 +42,7 @@ function buildReport(call, research = null, bill = null) {
     verification,
     confidence: verification.confidence,
     summary: finalPrice
-      ? `Ringside moved the monthly price from ₹${currentPrice.toLocaleString('en-IN')} to ₹${finalPrice.toLocaleString('en-IN')}.`
+      ? `Ringside moved the monthly price from ₹${currentPrice.toLocaleString('en-IN')} to ₹${finalPrice.toLocaleString('en-IN')}${state.resolution_reason === 'verbally_confirmed' ? ', with verbal confirmation from the representative.' : '.'}`
       : 'Ringside did not receive a verifiable lower offer.',
     research: research || { sources: [], provider: 'none', verified: false },
     bill: bill || null,

@@ -302,18 +302,41 @@ app.get('/audio/:file', (req, res) => {
   return res.sendFile(path.join(__dirname, 'audio', file));
 });
 
-function offerAtTurn(conversation, upTo, config) {
+function offerStateAtTurn(conversation, upTo, config) {
   const c = deriveConfig(config);
-  let offer = c.currentPrice;
+  let currentOffer = null;
   conversation.slice(0, upTo + 1).forEach((t) => {
     if (t.speaker === 'rep') {
-      if (t.action === 'first_offer') offer = c.firstOffer;
-      if (t.action === 'fold')        offer = c.foldOffer;
-      // Human mode: use stored offer if present
-      if (typeof t.currentOffer === 'number') offer = t.currentOffer;
+      if (t.action === 'first_offer') currentOffer = c.firstOffer;
+      if (t.action === 'fold') currentOffer = c.foldOffer;
+      if (t.offerDetected && typeof t.currentOffer === 'number') currentOffer = t.currentOffer;
+      // Older human-call records did not carry offerDetected. Preserve only a
+      // genuine lower counteroffer, never the unchanged starting bill.
+      if (t.action === 'human_speech' && typeof t.currentOffer === 'number' && t.currentOffer < c.currentPrice) {
+        currentOffer = t.currentOffer;
+      }
     }
   });
-  return offer;
+  return { currentOffer, offerDetected: currentOffer !== null };
+}
+
+function offerAtTurn(conversation, upTo, config) {
+  return offerStateAtTurn(conversation, upTo, config).currentOffer;
+}
+
+function offerStateForNegotiation(state) {
+  const hasOffer = Array.isArray(state?.rep_offers_used) && state.rep_offers_used.length > 0;
+  return {
+    currentOffer: hasOffer ? state.current_offer : null,
+    offerDetected: hasOffer,
+  };
+}
+
+function enrichConversation(conversation, config) {
+  return (conversation || []).map((turn, index, turns) => ({
+    ...turn,
+    ...offerStateAtTurn(turns, index, config),
+  }));
 }
 
 function twimlPlay(audioUrl, nextUrl, speakerText) {
@@ -420,7 +443,7 @@ async function handleAgentCall(callId, config) {
       emit('turn_text', {
         callId, turn: index,
         speaker, text, action,
-        currentOffer: state.current_offer,
+        ...offerStateForNegotiation(state),
       });
     },
   });
@@ -473,7 +496,7 @@ async function handleDemoCall(callId, config) {
       callState.currentTurn = index;
       callState.negotiationState = state;
       await persistCall(callState);
-      emit('turn_playing', { callId, turn: index, speaker, text, action, currentOffer: state.current_offer });
+      emit('turn_playing', { callId, turn: index, speaker, text, action, ...offerStateForNegotiation(state) });
       await wait(260);
     },
   });
@@ -571,6 +594,7 @@ app.post('/twiml/turn', requireTwilioSignature, (req, res) => {
     callId, turn: n,
     speaker: audioFile.speaker, text: audioFile.text, action: audioFile.action,
     currentOffer: offerAtTurn(call.negotiationState.conversation, n, call.config),
+    offerDetected: offerStateAtTurn(call.negotiationState.conversation, n, call.config).offerDetected,
   });
 
   console.log(`[TWIML] Turn ${n} (${audioFile.speaker}): ${audioFile.text.substring(0, 60)}…`);
@@ -607,7 +631,7 @@ app.post('/twiml/human-start', requireTwilioSignature, async (req, res) => {
     emit('turn_playing', {
       callId, turn: n, speaker: 'ringside',
       text: result.text, action: result.action,
-      currentOffer: call.negotiationState.current_offer,
+      ...offerStateForNegotiation(call.negotiationState),
     });
 
     const ngrok    = publicBaseUrl();
@@ -655,12 +679,16 @@ app.post('/twiml/human-gather', requireTwilioSignature, async (req, res) => {
           callId, turn: repTurnN, speaker: 'rep',
           text: lastRepTurn.redacted ? '[Filtered non-negotiation content]' : speechText,
           action: 'human_speech',
-          currentOffer: call.negotiationState.current_offer,
+          currentOffer: lastRepTurn.offerDetected ? lastRepTurn.currentOffer : null,
+          offerDetected: Boolean(lastRepTurn.offerDetected),
         });
       }
 
       const budgetHit = call.negotiationState.turn_count >= call.config.maxTurns;
-      const forcedAction = budgetHit && !call.negotiationState.resolved ? 'best_offer' : null;
+      const hasCounterOffer = call.negotiationState.current_offer < call.config.currentPrice;
+      const forcedAction = budgetHit && !call.negotiationState.resolved && !call.negotiationState.awaiting_confirmation && !call.negotiationState.confirmation_received
+        ? (hasCounterOffer ? 'confirm_offer' : 'best_offer')
+        : null;
       const result = await runRingsideTurn(call.negotiationState, forcedAction);
       call.negotiationState = result.state;
 
@@ -673,7 +701,7 @@ app.post('/twiml/human-gather', requireTwilioSignature, async (req, res) => {
       emit('turn_playing', {
         callId, turn: rTurnN, speaker: 'ringside',
         text: result.text, action: result.action,
-        currentOffer: call.negotiationState.current_offer,
+        ...offerStateForNegotiation(call.negotiationState),
       });
 
       const media = `<Say>${escapeXml(result.text)}</Say>`;
@@ -810,7 +838,7 @@ app.get('/api/state/:callId', requireUser, async (req, res) => {
       resolved: state.resolved,
       finalPrice: state.final_price,
       resolutionReason: state.resolution_reason,
-      conversation: state.conversation || [],
+      conversation: enrichConversation(state.conversation, persisted.config),
       report: persisted.report,
       research: persisted.research,
       bill: persisted.bill,
@@ -827,10 +855,7 @@ app.get('/api/state/:callId', requireUser, async (req, res) => {
     ? fullConvo
     : fullConvo.slice(0, Math.max(0, call.currentTurn + 1));
   // Enrich each visible turn with current offer at that point
-  const enrichedConvo = visibleConvo.map((t, i) => ({
-    ...t,
-    currentOffer: offerAtTurn(visibleConvo, i, call.config),
-  }));
+  const enrichedConvo = enrichConversation(visibleConvo, call.config);
 
   res.json({
     callId:      call.callId,

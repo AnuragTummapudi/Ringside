@@ -5,6 +5,8 @@ const ALLOWED_ACTIONS = new Set([
   'lever_loyalty_competitor',
   'lever_escalate',
   'accept',
+  'confirm_offer',
+  'thank_you',
   'best_offer',
   'continue',
   'first_offer',
@@ -47,6 +49,17 @@ const LEAKAGE_RE = [
   /my\s+instructions\s+(are|were)/i,
   /anthropic/i,
   /hidden\s+instructions/i,
+];
+
+// These are not unsafe user inputs; they are model process language that must
+// never be spoken into a live negotiation.
+const SPOKEN_META_RE = [
+  /\bi\s+(?:need|have)\s+to\s+(?:respond|act|speak|continue)\b/i,
+  /\brespond\s+naturally\b/i,
+  /\b(?:as a customer|in this negotiation)\b/i,
+  /\blet me continue\b/i,
+  /\b(?:my|the)\s+(?:role|instructions|process|context)\b/i,
+  /\bi appreciate (?:the|your) context,?\s+but\b/i,
 ];
 
 function truncate(text, max) {
@@ -118,11 +131,12 @@ function sanitizeSpokenText(text, fallback) {
     .trim();
 
   if (!t) return fallback;
+  if (SPOKEN_META_RE.some((re) => re.test(t))) return fallback;
   if (observeText(t).suspicious) return fallback;
 
   const sentences = t.split(/(?<=[.!?])\s+/).filter(Boolean).slice(0, 2);
   t = sentences.join(' ');
-  if (t.length > 320) t = t.slice(0, 317).trim() + '…';
+  if (t.length > 240) t = t.slice(0, 237).trim() + '…';
   return t || fallback;
 }
 

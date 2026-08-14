@@ -6,6 +6,7 @@ const {
   getRingsideAction,
   applyRingsideTurn,
   ingestHumanSpeech,
+  extractOfferFromSpeech,
 } = require('./negotiate');
 
 function testConfigBounds() {
@@ -80,6 +81,34 @@ function testPlainSpeechSanitizer() {
     policy.sanitizeSpokenText('First sentence. Second sentence. Third sentence.', fallback),
     'First sentence. Second sentence.'
   );
+  assert.strictEqual(
+    policy.sanitizeSpokenText('I appreciate the context, but I need to respond naturally as a customer in this negotiation.', fallback),
+    fallback
+  );
+}
+
+function testHumanConfirmationFlow() {
+  const state = createState(deriveConfig({ mode: 'human', currentPrice: 2499, targetPrice: 1750 }));
+  const offered = ingestHumanSpeech(state, 'I can approve 1800 rupees per month.', 1800);
+  assert.strictEqual(getRingsideAction(offered), 'confirm_offer');
+
+  const awaiting = applyRingsideTurn(offered, 'confirm_offer', 'Please confirm that ₹1800 per month will be applied to my account.');
+  assert.strictEqual(awaiting.resolved, false);
+  assert.strictEqual(awaiting.awaiting_confirmation, true);
+
+  const confirmed = ingestHumanSpeech(awaiting, 'Yes, confirmed.', null);
+  assert.strictEqual(confirmed.confirmation_received, true);
+  assert.strictEqual(getRingsideAction(confirmed), 'thank_you');
+
+  const finalState = applyRingsideTurn(confirmed, 'thank_you', 'Thank you for confirming. I appreciate your help today.');
+  assert.strictEqual(finalState.resolved, true);
+  assert.strictEqual(finalState.final_price, 1800);
+  assert.strictEqual(finalState.resolution_reason, 'verbally_confirmed');
+}
+
+async function testNoPriceSpeechSkipsExtraction() {
+  const offer = await extractOfferFromSpeech('What should I do? Can you offer some other rate?', { mode: 'human' });
+  assert.strictEqual(offer, null);
 }
 
 function testUnknownActionIsBlocked() {
@@ -95,14 +124,19 @@ function testUnknownActionIsBlocked() {
   assert.strictEqual(decided.blocked, true);
 }
 
-function main() {
+async function main() {
   testConfigBounds();
   testInjectionSpeechCannotMoveState();
   testOverCeilingOfferCannotBeAccepted();
   testGoodOfferStillResolvesDeterministically();
   testPlainSpeechSanitizer();
+  testHumanConfirmationFlow();
   testUnknownActionIsBlocked();
+  await testNoPriceSpeechSkipsExtraction();
   console.log('PASS guardrails');
 }
 
-main();
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
