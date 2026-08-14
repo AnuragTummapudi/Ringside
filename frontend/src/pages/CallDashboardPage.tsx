@@ -26,8 +26,9 @@ export default function CallDashboardPage() {
   useEffect(() => {
     if (!callId) return
     fetch(`${API_BASE}/api/state/${callId}`, { credentials: 'include' }).then(async (response) => { const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Call not found'); return data as CallState }).then((data) => {
-      setState(data); setStatus(data.status === 'resolved' ? 'Complete' : data.status || 'Preparing'); setTurns(data.conversation || []); setReport(data.report || null)
-      const lastOffer = [...(data.conversation || [])].reverse().find((turn) => turn.offerDetected && typeof turn.currentOffer === 'number')
+      const conversation = Array.isArray(data.conversation) ? data.conversation : []
+      setState(data); setStatus(data.status === 'resolved' ? 'Complete' : data.status || 'Preparing'); setTurns(conversation); setReport(data.report || null)
+      const lastOffer = [...conversation].reverse().find((turn) => turn.offerDetected && typeof turn.currentOffer === 'number')
       setOffer(lastOffer?.currentOffer ?? data.finalPrice ?? null)
     }).catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'Call not found'))
   }, [callId])
@@ -40,9 +41,10 @@ export default function CallDashboardPage() {
     const onAnswered = (event: MessageEvent) => { if (parse(event).callId === callId) setStatus('Listening') }
     const onTurn = (event: MessageEvent) => { const data = parse(event) as Turn & { callId: string }; if (data.callId !== callId) return; setStatus(data.speaker === 'ringside' ? 'Negotiating' : 'Listening'); setSpeaker(data.speaker); if (data.offerDetected && typeof data.currentOffer === 'number') setOffer(data.currentOffer); setTurns((current) => current.some((turn) => turn.turn === data.turn && turn.speaker === data.speaker) ? current : [...current, data]); window.setTimeout(() => feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: 'smooth' }), 30) }
     const onResolved = (event: MessageEvent) => { const data = parse(event); if (data.callId !== callId) return; setStatus('Complete'); setSpeaker(null); setOffer(data.finalPrice); if (data.report) setReport(data.report) }
+    const onCallEnded = (event: MessageEvent) => { const data = parse(event); if (data.callId !== callId) return; setStatus('Complete'); setSpeaker(null); if (typeof data.finalPrice === 'number') setOffer(data.finalPrice); setState((current) => current ? { ...current, status: 'completed', takeover: current.takeover ? { ...current.takeover, canTakeOver: false } : current.takeover } : current) }
     const onError = (event: MessageEvent) => { const data = parse(event); if (data.callId === callId) { setStatus('Error'); setError(data.error || 'The call ended unexpectedly') } }
     const onTakeover = (event: MessageEvent) => { const data = parse(event); if (data.callId === callId) setState((current) => current ? { ...current, takeover: data.takeover } : current) }
-    events.addEventListener('call_preparing', onPreparing); events.addEventListener('call_answered', onAnswered); events.addEventListener('turn_playing', onTurn); events.addEventListener('turn_text', onTurn); events.addEventListener('call_resolved', onResolved); events.addEventListener('call_error', onError); events.addEventListener('takeover_state', onTakeover)
+    events.addEventListener('call_preparing', onPreparing); events.addEventListener('call_answered', onAnswered); events.addEventListener('turn_playing', onTurn); events.addEventListener('turn_text', onTurn); events.addEventListener('call_resolved', onResolved); events.addEventListener('call_ended', onCallEnded); events.addEventListener('call_error', onError); events.addEventListener('takeover_state', onTakeover)
     return () => { events.close() }
   }, [callId])
 
@@ -90,19 +92,22 @@ function TakeoverControl({ callId, takeover, onTakeover, onError }: { callId: st
 
   async function activateWithRetry() {
     let lastError: Error | null = null
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
       try { return await request('activate') } catch (error) {
         lastError = error instanceof Error ? error : new Error('Browser microphone is still connecting')
-        await new Promise((resolve) => window.setTimeout(resolve, 350))
+        if (lastError.message !== 'Browser microphone is still connecting. Try again in a moment.') throw lastError
+        await new Promise((resolve) => window.setTimeout(resolve, 500))
       }
     }
-    throw lastError || new Error('Browser microphone is still connecting')
+    throw lastError || new Error('The browser microphone did not join the call in time')
   }
 
   async function takeOver() {
     setBusy(true); setLocalError(null); onError(null)
+    let prepared = false
     try {
       const setup = await request('token')
+      prepared = true
       const { Device: VoiceDevice } = await import('@twilio/voice-sdk')
       const device = new VoiceDevice(setup.token)
       deviceRef.current = device
@@ -115,7 +120,7 @@ function TakeoverControl({ callId, takeover, onTakeover, onError }: { callId: st
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Browser takeover could not be started'
       setLocalError(message)
-      await request('cancel').catch(() => {})
+      if (prepared) await request('cancel').catch(() => {})
     } finally {
       setBusy(false)
     }

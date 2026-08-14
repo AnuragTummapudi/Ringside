@@ -130,6 +130,17 @@ function browserTakeoverConfigured() {
   );
 }
 
+async function browserTakeoverApplicationMatchesBackend() {
+  const expected = new URL(`${publicBaseUrl()}/twiml/browser-takeover`);
+  const application = await twilioClient().applications(process.env.TWILIO_TWIML_APP_SID).fetch();
+  const configured = new URL(application.voiceUrl || '');
+  return (
+    configured.origin === expected.origin &&
+    configured.pathname === expected.pathname &&
+    String(application.voiceMethod || '').toUpperCase() === 'POST'
+  );
+}
+
 function publicTakeoverState(call) {
   const available = call?.config?.mode === 'human' && browserTakeoverConfigured();
   const takeover = call?.takeover;
@@ -392,7 +403,8 @@ function offerStateForNegotiation(state) {
 }
 
 function enrichConversation(conversation, config) {
-  return (conversation || []).map((turn, index, turns) => ({
+  const turns = Array.isArray(conversation) ? conversation : [];
+  return turns.map((turn, index) => ({
     ...turn,
     ...offerStateAtTurn(turns, index, config),
   }));
@@ -595,6 +607,7 @@ async function handleHumanCall(callId, config) {
   callState.status = 'ringing';
   callSidToId[placedCall.sid] = callId;
   emit('call_placed', { callId, callSid: placedCall.sid });
+  emitTakeoverState(callState);
   console.log(`[CALL ${callId}] Human call placed: ${placedCall.sid}`);
 }
 
@@ -604,8 +617,12 @@ function ownedHumanCall(req, res) {
     res.status(404).json({ error: 'Active human call not found' });
     return null;
   }
-  if (call.config.mode !== 'human' || !call.twilioCallSid || call.endedAt) {
+  if (call.config.mode !== 'human' || !call.twilioCallSid) {
     res.status(409).json({ error: 'Browser takeover is only available during an active real call' });
+    return null;
+  }
+  if (call.endedAt) {
+    res.status(409).json({ error: 'The phone call has already ended, so browser takeover is no longer available.' });
     return null;
   }
   return call;
@@ -698,10 +715,22 @@ app.post('/twiml/rep-answer', requireTwilioSignature, (req, res) => {
 app.post('/twiml/browser-takeover', requireTwilioSignature, (req, res) => {
   const callId = String(req.body?.callId || req.query?.callId || '');
   const call = activeCalls[callId];
-  const identity = String(req.body?.From || '').replace(/^client:/, '');
+  const identity = String(req.body?.Caller || req.body?.From || '').replace(/^client:/i, '').trim();
   const takeover = call?.takeover;
+  const identityPrefix = call ? `ringside-${call.callId.replace(/-/g, '')}-` : '';
+  const identityMatchesCall = Boolean(takeover && (identity === takeover.identity || identity.startsWith(identityPrefix)));
 
-  if (!call || !takeover || identity !== takeover.identity || !['prepared', 'browser_joined'].includes(takeover.phase)) {
+  const rejection = !call
+    ? 'active call was not found'
+    : !takeover
+      ? 'takeover was not prepared'
+      : !identityMatchesCall
+        ? 'browser identity did not match the short-lived token'
+        : !['prepared', 'browser_joined'].includes(takeover.phase)
+          ? `takeover was already ${takeover.phase}`
+          : null;
+  if (rejection) {
+    console.warn(`[TAKEOVER ${callId || 'unknown'}] Browser join rejected: ${rejection}`);
     return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Reject reason="rejected"/></Response>`);
   }
 
@@ -1000,11 +1029,18 @@ app.post('/api/negotiate', requireApiAccess, async (req, res) => {
   }
 });
 
-app.post('/api/call/:callId/takeover/token', requireUser, (req, res) => {
+app.post('/api/call/:callId/takeover/token', requireUser, async (req, res) => {
   const call = ownedHumanCall(req, res);
   if (!call) return;
   if (!browserTakeoverConfigured()) {
     return res.status(503).json({ error: 'Browser takeover requires Twilio Voice SDK credentials and a TwiML App.' });
+  }
+  try {
+    if (!await browserTakeoverApplicationMatchesBackend()) {
+      return res.status(409).json({ error: 'The TwiML App must point to this server\'s current public /twiml/browser-takeover URL before browser takeover can start.' });
+    }
+  } catch (error) {
+    return res.status(502).json({ error: `Could not verify the browser takeover TwiML App: ${error.message}` });
   }
   if (!['idle', 'cancelled', 'failed'].includes(call.takeover?.phase || 'idle')) {
     return res.status(409).json({ error: 'A browser takeover is already being prepared for this call.' });
