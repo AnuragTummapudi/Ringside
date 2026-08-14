@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@twilio/voice-sdk": "^2.18.3",
     "framer-motion": "^13.0.0",
     "lucide-react": "^0.511.0",
     "react": "^18.3.1",

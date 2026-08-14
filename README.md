@@ -18,9 +18,9 @@
 
 Recurring bills are often negotiable, but finding comparable plans, collecting account details, and staying firm through a support call takes time. Ringside turns that work into a structured negotiation workflow: extract bill details, set a target, attach local research, run a policy-bound negotiation, and retain the outcome for the signed-in user.
 
-The repository contains a React/Vite application and one Express service. It supports a deterministic local demo, optional Anthropic-generated lines, optional Maya speech synthesis, and an optional Twilio human-call path. The demo does not place a phone call or require an LLM or TTS credential; Google sign-in is still required before a negotiation can start so records remain private.
+The repository contains a React/Vite application and one Express service. It supports a deterministic local demo, optional Anthropic-generated lines, optional Maya speech synthesis, an optional Twilio human-call path, and browser-based human takeover for an active real call. The demo does not place a phone call or require an LLM or TTS credential; Google sign-in is still required before a negotiation can start so records remain private.
 
-Ringside is deliberately explicit about its current boundaries. Its research layer is a local metadata-aware keyword store, not embeddings or a vector database. Bill extraction is local text/OCR plus heuristics, not a cloud document model. Human calls use Twilio Gather speech capture, not a persistent media-stream runtime.
+Ringside is deliberately explicit about its current boundaries. Its research layer is a local metadata-aware keyword store, not embeddings or a vector database. Bill extraction is local text/OCR plus heuristics, not a cloud document model. Human calls use Twilio Gather speech capture; browser takeover bridges the phone leg and browser into a temporary Twilio Conference. It does not provide continuous speech-to-text during the user's browser takeover.
 
 ## How it works
 
@@ -145,6 +145,16 @@ Real Call mode is optional and should be configured separately from the local de
 3. A public HTTPS URL in `NGROK_URL`. During local development, run `ngrok http 3000`; in production, use the deployed backend URL.
 4. Maya credentials and ffmpeg for generated audio, or accept the TwiML `<Say>` fallback.
 
+### Browser takeover
+
+Browser takeover is optional. It lets the signed-in owner join an active real call from the call dashboard, speak from the browser microphone, and return control to Ringside. Configure a Twilio API Key and a TwiML App in addition to the normal real-call variables:
+
+1. Create a Twilio API Key with Voice access and set `TWILIO_API_KEY_SID` and `TWILIO_API_KEY_SECRET` server-side.
+2. Create a Voice TwiML App whose Voice URL is `${NGROK_URL}/twiml/browser-takeover` locally, or the equivalent deployed backend URL.
+3. Set that App SID as `TWILIO_TWIML_APP_SID`.
+
+Ringside mints a five-minute, call-scoped browser token only after the signed-in call owner selects **Take over**. The browser joins first; the phone call is redirected to the conference only after the microphone connection is established. If the browser disconnects, Ringside resumes the controlled call path.
+
 The supplied phone number in Real Call mode is the number Ringside will call. On a Twilio trial account, the destination must be verified and the destination country's voice permissions must be enabled.
 
 Before placing a call, the server checks `NGROK_URL/healthz`. In production, keep `REQUIRE_TWILIO_SIGNATURES=true` and do not enable `PUBLIC_OUTBOUND_CALLS_ENABLED` until the deployment is ready for real outbound calls.
@@ -219,6 +229,9 @@ Copy `.env.example` to `.env`. Keep all real values out of Git.
 | `TWILIO_AUTH_TOKEN` | Real calls | Twilio webhook validation and API credential. |
 | `TWILIO_RINGSIDE_NUMBER` | Real calls | Voice-capable Twilio number in E.164 format. |
 | `TWILIO_REP_NUMBER` | Optional agent call path | Default destination for the Twilio agent-call path. |
+| `TWILIO_API_KEY_SID` | Browser takeover | Twilio API Key SID used to mint browser Voice SDK tokens. |
+| `TWILIO_API_KEY_SECRET` | Browser takeover | Twilio API Key secret; server-side only. |
+| `TWILIO_TWIML_APP_SID` | Browser takeover | Twilio Voice TwiML App configured to call `/twiml/browser-takeover`. |
 | `NGROK_URL` | Real calls | Public HTTPS base URL used for TwiML, audio, and status callbacks. |
 | `RINGSIDE_API_TOKEN` | Internal API access | Enables access to the internal `/api/negotiate` endpoint and production call gating. |
 | `PUBLIC_OUTBOUND_CALLS_ENABLED` | Production only | Explicitly permits public outbound call starts. Defaults to `false`. |
@@ -255,6 +268,9 @@ All JSON endpoints are served by the Express process. Owner-scoped endpoints req
 | `POST` | `/api/call/:callId/pause` | Session | Marks an active call paused. |
 | `POST` | `/api/call/:callId/resume` | Session | Marks an active call live. |
 | `POST` | `/api/call/:callId/end` | Session | Finalizes an active call. |
+| `POST` | `/api/call/:callId/takeover/token` | Session | Issues a short-lived browser takeover token for the active call owner. |
+| `POST` | `/api/call/:callId/takeover/activate` | Session | Moves the provider phone leg into the browser takeover conference. |
+| `POST` | `/api/call/:callId/takeover/return` | Session | Removes the browser participant and returns control to Ringside. |
 | `POST` | `/api/negotiate` | Internal token | Runs a text negotiation without the browser flow. |
 | `POST` | `/twiml/*` | Twilio webhook | TwiML and speech-gather call handlers. |
 | `POST` | `/api/call-status` | Twilio webhook | Receives Twilio call status callbacks. |

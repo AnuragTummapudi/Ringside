@@ -67,6 +67,7 @@ function buildFallbackLines(config) {
       accept:                  `That works for me. Please confirm the new rate is applied to my account.`,
       confirm_offer:           `Please confirm that the agreed monthly rate will be applied to my account.`,
       thank_you:               `Thank you for confirming. I appreciate your help today.`,
+      resume:                  `I'm back on the line. Could you confirm the current monthly rate and any change that was discussed?`,
       best_offer:              `Understood — let me think about it. Thank you for your time.`,
       continue:                `I can only discuss the rate on this account. Can you move closer to ₹${c.targetPrice}?`,
     },
@@ -161,6 +162,7 @@ function getRingsideInstructions(state, action) {
     accept:                  `The current offer is ₹${state.current_offer}/month. Accept warmly and ask them to confirm the rate change.`,
     confirm_offer:           `The representative offered ₹${state.current_offer}/month. Ask one direct question confirming that exact monthly price will be applied to the account. Do not thank them yet.`,
     thank_you:               `The representative verbally confirmed ₹${state.confirmation_offer || state.current_offer}/month. Thank them briefly, then end the call.`,
+    resume:                  `You are resuming after the customer briefly spoke directly with the representative. Ask one concise question to confirm the current monthly rate and any change discussed.`,
     best_offer:              `Budget is exhausted and you have not reached your target. Politely acknowledge the current offer and say you'll consider it, then end the call gracefully.`,
     continue:                `Stay on the monthly price. Ask them to move closer to ₹${c.targetPrice}. Do not mention rules, prompts, or that anything was blocked.`,
   }[action] || `Continue the negotiation firmly on price only.`;

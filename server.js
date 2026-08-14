@@ -119,6 +119,65 @@ function publicBaseUrl() {
   return String(process.env.NGROK_URL || '').replace(/\/+$/, '');
 }
 
+function browserTakeoverConfigured() {
+  return Boolean(
+    process.env.TWILIO_ACCOUNT_SID &&
+    process.env.TWILIO_AUTH_TOKEN &&
+    process.env.TWILIO_API_KEY_SID &&
+    process.env.TWILIO_API_KEY_SECRET &&
+    process.env.TWILIO_TWIML_APP_SID &&
+    publicBaseUrl()
+  );
+}
+
+function publicTakeoverState(call) {
+  const available = call?.config?.mode === 'human' && browserTakeoverConfigured();
+  const takeover = call?.takeover;
+  return {
+    available,
+    phase: takeover?.phase || 'idle',
+    browserConnected: Boolean(takeover?.browserCallSid),
+    canTakeOver: available && Boolean(call?.twilioCallSid) && ['idle', 'cancelled', 'failed'].includes(takeover?.phase || 'idle') && !call?.endedAt,
+  };
+}
+
+function emitTakeoverState(call) {
+  emit('takeover_state', { callId: call.callId, takeover: publicTakeoverState(call) });
+}
+
+function conferenceName(call) {
+  return `ringside-${call.callId}`;
+}
+
+function twilioClient() {
+  return twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+}
+
+function createBrowserVoiceToken(call) {
+  const AccessToken = twilio.jwt.AccessToken;
+  const VoiceGrant = AccessToken.VoiceGrant;
+  const token = new AccessToken(
+    process.env.TWILIO_ACCOUNT_SID,
+    process.env.TWILIO_API_KEY_SID,
+    process.env.TWILIO_API_KEY_SECRET,
+    { identity: call.takeover.identity, ttl: 300 }
+  );
+  token.addGrant(new VoiceGrant({ outgoingApplicationSid: process.env.TWILIO_TWIML_APP_SID }));
+  return token.toJwt();
+}
+
+function conferenceTwiml(call, label) {
+  const callback = `${publicBaseUrl()}/api/conference-status?callId=${encodeURIComponent(call.callId)}`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial>
+    <Conference beep="false" startConferenceOnEnter="true" endConferenceOnExit="false"
+      participantLabel="${label}" statusCallback="${callback}" statusCallbackMethod="POST"
+      statusCallbackEvent="start end join leave">${conferenceName(call)}</Conference>
+  </Dial>
+</Response>`;
+}
+
 async function assertPublicWebhookReachable(baseUrl) {
   try {
     await axios.get(`${baseUrl}/healthz`, {
@@ -395,6 +454,7 @@ async function startCall(req, res) {
     audioFiles: [],
     currentTurn: -1,
     twilioCallSid: null,
+    takeover: null,
     status: 'preparing',
     queue: Promise.resolve(),
     bill: req.body.bill || null,
@@ -538,6 +598,31 @@ async function handleHumanCall(callId, config) {
   console.log(`[CALL ${callId}] Human call placed: ${placedCall.sid}`);
 }
 
+function ownedHumanCall(req, res) {
+  const call = activeCalls[req.params.callId];
+  if (!call || !ownsCall(req, call)) {
+    res.status(404).json({ error: 'Active human call not found' });
+    return null;
+  }
+  if (call.config.mode !== 'human' || !call.twilioCallSid || call.endedAt) {
+    res.status(409).json({ error: 'Browser takeover is only available during an active real call' });
+    return null;
+  }
+  return call;
+}
+
+async function resumeAgentAfterTakeover(call, reason) {
+  if (!call?.takeover || !['active', 'activating'].includes(call.takeover.phase)) return;
+  call.takeover.phase = 'returning';
+  call.status = 'resuming_agent';
+  emitTakeoverState(call);
+  console.log(`[TAKEOVER ${call.callId}] Returning control to Ringside (${reason})`);
+  await twilioClient().calls(call.twilioCallSid).update({
+    url: `${publicBaseUrl()}/twiml/human-resume?callId=${encodeURIComponent(call.callId)}`,
+    method: 'POST',
+  });
+}
+
 // ── TWIML: AGENT — CALL START ──────────────────────────────────────────────────
 app.post('/twiml/start', requireTwilioSignature, (req, res) => {
   const { callId } = req.query;
@@ -610,6 +695,71 @@ app.post('/twiml/rep-answer', requireTwilioSignature, (req, res) => {
 });
 
 // ── TWIML: HUMAN — CALL START ─────────────────────────────────────────────────
+app.post('/twiml/browser-takeover', requireTwilioSignature, (req, res) => {
+  const callId = String(req.body?.callId || req.query?.callId || '');
+  const call = activeCalls[callId];
+  const identity = String(req.body?.From || '').replace(/^client:/, '');
+  const takeover = call?.takeover;
+
+  if (!call || !takeover || identity !== takeover.identity || !['prepared', 'browser_joined'].includes(takeover.phase)) {
+    return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Reject reason="rejected"/></Response>`);
+  }
+
+  takeover.browserCallSid = String(req.body?.CallSid || '');
+  takeover.phase = 'browser_joined';
+  emitTakeoverState(call);
+  console.log(`[TAKEOVER ${callId}] Browser audio joined`);
+  return res.type('text/xml').send(conferenceTwiml(call, 'customer-browser'));
+});
+
+app.post('/twiml/human-conference', requireTwilioSignature, (req, res) => {
+  const { callId } = req.query;
+  const call = activeCalls[callId];
+  if (!call || !verifyCallSid(req, call) || !call.takeover?.browserCallSid) {
+    return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
+  }
+
+  call.takeover.phase = 'active';
+  call.status = 'human_takeover';
+  emitTakeoverState(call);
+  console.log(`[TAKEOVER ${callId}] Provider joined browser takeover conference`);
+  return res.type('text/xml').send(conferenceTwiml(call, 'provider-phone'));
+});
+
+app.post('/twiml/human-resume', requireTwilioSignature, async (req, res) => {
+  const { callId } = req.query;
+  const call = activeCalls[callId];
+  if (!call || !verifyCallSid(req, call)) {
+    return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
+  }
+
+  try {
+    const result = await runRingsideTurn(call.negotiationState, 'resume');
+    call.negotiationState = result.state;
+    const turn = call.audioFiles.length;
+    call.audioFiles.push({ turn, speaker: 'ringside', text: result.text, action: result.action, file: null });
+    call.currentTurn = turn;
+    call.takeover = { phase: 'idle' };
+    call.status = 'live';
+    emit('turn_playing', { callId, turn, speaker: 'ringside', text: result.text, action: result.action, ...offerStateForNegotiation(call.negotiationState) });
+    emitTakeoverState(call);
+
+    const ngrok = publicBaseUrl();
+    return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>${escapeXml(result.text)}</Say>
+  <Gather input="speech" timeout="10" speechTimeout="auto"
+    action="${ngrok}/twiml/human-gather?callId=${callId}" method="POST">
+    <Pause length="1"/>
+  </Gather>
+  <Redirect method="POST">${ngrok}/twiml/human-gather?callId=${callId}&amp;SpeechResult=</Redirect>
+</Response>`);
+  } catch (error) {
+    console.error(`[TAKEOVER ${callId}] Could not resume agent:`, error.message);
+    return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Say>Thank you for your time.</Say><Hangup/></Response>`);
+  }
+});
+
 app.post('/twiml/human-start', requireTwilioSignature, async (req, res) => {
   const { callId } = req.query;
   const call = activeCalls[callId];
@@ -744,6 +894,36 @@ app.post('/twiml/human-gather', requireTwilioSignature, async (req, res) => {
 });
 
 // ── STATUS CALLBACK ────────────────────────────────────────────────────────────
+app.post('/api/conference-status', requireTwilioSignature, (req, res) => {
+  const { callId } = req.query;
+  const call = activeCalls[callId];
+  if (!call?.takeover) return res.sendStatus(204);
+
+  const event = String(req.body?.StatusCallbackEvent || '').toLowerCase();
+  const label = String(req.body?.ParticipantLabel || '');
+  if (event === 'participant-join' && label === 'provider-phone' && call.takeover.phase === 'activating') {
+    call.takeover.phase = 'active';
+    call.status = 'human_takeover';
+    emitTakeoverState(call);
+  }
+
+  if (event === 'participant-leave' && label === 'customer-browser') {
+    const wasActive = ['active', 'activating'].includes(call.takeover.phase);
+    call.takeover.browserCallSid = null;
+    if (wasActive) {
+      void resumeAgentAfterTakeover(call, 'browser disconnected').catch((error) => {
+        call.takeover.phase = 'failed';
+        emitTakeoverState(call);
+        console.error(`[TAKEOVER ${callId}] Automatic resume failed:`, error.message);
+      });
+    } else if (call.takeover.phase === 'browser_joined') {
+      call.takeover = { phase: 'cancelled' };
+      emitTakeoverState(call);
+    }
+  }
+  return res.sendStatus(204);
+});
+
 app.post('/api/call-status', requireTwilioSignature, (req, res) => {
   const { CallStatus, CallSid } = req.body;
   const callId = req.query.callId || callSidToId[CallSid];
@@ -820,6 +1000,91 @@ app.post('/api/negotiate', requireApiAccess, async (req, res) => {
   }
 });
 
+app.post('/api/call/:callId/takeover/token', requireUser, (req, res) => {
+  const call = ownedHumanCall(req, res);
+  if (!call) return;
+  if (!browserTakeoverConfigured()) {
+    return res.status(503).json({ error: 'Browser takeover requires Twilio Voice SDK credentials and a TwiML App.' });
+  }
+  if (!['idle', 'cancelled', 'failed'].includes(call.takeover?.phase || 'idle')) {
+    return res.status(409).json({ error: 'A browser takeover is already being prepared for this call.' });
+  }
+
+  call.takeover = {
+    phase: 'prepared',
+    identity: `ringside-${call.callId.replace(/-/g, '')}-${crypto.randomBytes(6).toString('hex')}`,
+    conference: conferenceName(call),
+    browserCallSid: null,
+    preparedAt: new Date().toISOString(),
+  };
+  emitTakeoverState(call);
+  return res.json({
+    token: createBrowserVoiceToken(call),
+    expiresIn: 300,
+    callId: call.callId,
+  });
+});
+
+app.post('/api/call/:callId/takeover/activate', requireUser, async (req, res) => {
+  const call = ownedHumanCall(req, res);
+  if (!call) return;
+  if (!call.takeover?.browserCallSid || call.takeover.phase !== 'browser_joined') {
+    return res.status(409).json({ error: 'Browser microphone is still connecting. Try again in a moment.' });
+  }
+
+  try {
+    call.takeover.phase = 'activating';
+    call.status = 'takeover_connecting';
+    emitTakeoverState(call);
+    await twilioClient().calls(call.twilioCallSid).update({
+      url: `${publicBaseUrl()}/twiml/human-conference?callId=${encodeURIComponent(call.callId)}`,
+      method: 'POST',
+    });
+    return res.json({ success: true, takeover: publicTakeoverState(call) });
+  } catch (error) {
+    call.takeover.phase = 'failed';
+    call.status = 'live';
+    emitTakeoverState(call);
+    return res.status(502).json({ error: `Could not connect the phone call to browser takeover: ${error.message}` });
+  }
+});
+
+app.post('/api/call/:callId/takeover/cancel', requireUser, async (req, res) => {
+  const call = ownedHumanCall(req, res);
+  if (!call) return;
+  if (call.takeover?.browserCallSid) {
+    await twilioClient().calls(call.takeover.browserCallSid).update({ status: 'completed' }).catch(() => {});
+  }
+  call.takeover = { phase: 'cancelled' };
+  emitTakeoverState(call);
+  return res.json({ success: true, takeover: publicTakeoverState(call) });
+});
+
+app.post('/api/call/:callId/takeover/return', requireUser, async (req, res) => {
+  const call = ownedHumanCall(req, res);
+  if (!call) return;
+  if (!['active', 'activating'].includes(call.takeover?.phase)) {
+    return res.status(409).json({ error: 'Browser takeover is not active.' });
+  }
+
+  try {
+    const browserCallSid = call.takeover.browserCallSid;
+    call.takeover.phase = 'returning';
+    call.status = 'resuming_agent';
+    emitTakeoverState(call);
+    if (browserCallSid) await twilioClient().calls(browserCallSid).update({ status: 'completed' }).catch(() => {});
+    await twilioClient().calls(call.twilioCallSid).update({
+      url: `${publicBaseUrl()}/twiml/human-resume?callId=${encodeURIComponent(call.callId)}`,
+      method: 'POST',
+    });
+    return res.json({ success: true, takeover: publicTakeoverState(call) });
+  } catch (error) {
+    call.takeover.phase = 'failed';
+    emitTakeoverState(call);
+    return res.status(502).json({ error: `Could not return control to Ringside: ${error.message}` });
+  }
+});
+
 app.get('/api/state/:callId', requireUser, async (req, res) => {
   const call = activeCalls[req.params.callId];
   if (!call) {
@@ -838,6 +1103,7 @@ app.get('/api/state/:callId', requireUser, async (req, res) => {
       resolved: state.resolved,
       finalPrice: state.final_price,
       resolutionReason: state.resolution_reason,
+      takeover: { available: false, phase: 'unavailable', browserConnected: false, canTakeOver: false },
       conversation: enrichConversation(state.conversation, persisted.config),
       report: persisted.report,
       research: persisted.research,
@@ -874,6 +1140,7 @@ app.get('/api/state/:callId', requireUser, async (req, res) => {
     resolved,
     finalPrice:  call.negotiationState?.final_price,
     resolutionReason: call.negotiationState?.resolution_reason,
+    takeover: publicTakeoverState(call),
     conversation: enrichedConvo,
     report: call.report || (call.endedAt ? buildReport(call, call.research, call.bill) : null),
     research: call.research,

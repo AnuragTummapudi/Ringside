@@ -104,6 +104,10 @@ function testHumanConfirmationFlow() {
   assert.strictEqual(finalState.resolved, true);
   assert.strictEqual(finalState.final_price, 1800);
   assert.strictEqual(finalState.resolution_reason, 'verbally_confirmed');
+
+  const rejected = ingestHumanSpeech(awaiting, 'No, that rate is not confirmed.', null);
+  assert.strictEqual(rejected.confirmation_received, false);
+  assert.strictEqual(rejected.awaiting_confirmation, true);
 }
 
 async function testNoPriceSpeechSkipsExtraction() {

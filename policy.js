@@ -7,6 +7,7 @@ const ALLOWED_ACTIONS = new Set([
   'accept',
   'confirm_offer',
   'thank_you',
+  'resume',
   'best_offer',
   'continue',
   'first_offer',
