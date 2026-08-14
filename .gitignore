@@ -1,19 +1,30 @@
 # Secrets — never commit
 .env
+.env.*
+!.env.example
 
 # Dependencies
 node_modules/
 frontend/node_modules/
+dist/
+build/
 
 # Generated audio files
 audio/
 
 # Local durable demo data and uploads
 data/
+uploads/
+tmp/
+coverage/
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
 
 # Logs
 *.log
 npm-debug.log*
+logs/
 
 # OS
 .DS_Store

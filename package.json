@@ -3,12 +3,18 @@
   "version": "1.0.0",
   "description": "AI bill negotiation agent — fights for you on the phone",
   "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "build:ui": "cd frontend && npm run build",
+    "clean:ui": "node scripts/clean-vite-assets.js",
+    "build:ui": "npm run clean:ui && cd frontend && npm run build",
+    "build": "npm run build:ui",
+    "typecheck": "cd frontend && npx tsc -b --pretty false",
     "dev:ui": "cd frontend && npm run dev",
-    "build": "npm run build:ui && node server.js",
+    "test": "npm run test:guardrails && npm run test:negotiate",
     "test:guardrails": "node test-guardrails.js",
     "test:negotiate": "node test-negotiate.js",
     "test:tts": "node test-tts.js",

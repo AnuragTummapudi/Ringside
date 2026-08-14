@@ -936,8 +936,8 @@ app.post('/api/call/:callId/end', requireUser, async (req, res) => {
 });
 
 // ── PAGE ROUTES ────────────────────────────────────────────────────────────────
-app.get('/dashboard', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+app.get('/dashboard', (_req, res) => {
+  res.redirect(302, '/history');
 });
 
 // SPA catch-all — serve React index for all client-side routes

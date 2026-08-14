@@ -1,227 +1,351 @@
-# Ringside
+<p align="center">
+  <img src="public/ringside-logo1.png" width="84" alt="Ringside logo" />
+</p>
 
-Ringside is an AI bill negotiation agent. It understands a bill, builds a negotiating position, runs a live negotiation, and records what happened. The repository contains a local demo transport plus an optional Twilio voice transport.
+<h1 align="center">Ringside</h1>
 
-## What works locally
+<p align="center">
+  An AI-assisted bill negotiation agent with local bill intelligence, policy-bound negotiation, optional voice calls, and private savings history.
+</p>
 
-The app uses Google sign-in before a negotiation can start, so each history is private to its owner. Once Google OAuth is configured, the local demo path is:
+<p align="center">
+  <img src="https://img.shields.io/badge/node-%3E%3D20-339933?logo=nodedotjs&logoColor=white" alt="Node.js 20 or later" />
+  <img src="https://img.shields.io/badge/react-18-61DAFB?logo=react&logoColor=black" alt="React 18" />
+  <img src="https://img.shields.io/badge/express-4-000000?logo=express&logoColor=white" alt="Express 4" />
+</p>
 
-```text
-Open /new
-  -> upload a synthetic or real bill, or enter details manually
-  -> review the live negotiation preview
-  -> sign in with Google when you start Demo mode
-  -> watch the real negotiation engine update via SSE
-  -> inspect the verified report and history
+## What is Ringside?
+
+Recurring bills are often negotiable, but finding comparable plans, collecting account details, and staying firm through a support call takes time. Ringside turns that work into a structured negotiation workflow: extract bill details, set a target, attach local research, run a policy-bound negotiation, and retain the outcome for the signed-in user.
+
+The repository contains a React/Vite application and one Express service. It supports a deterministic local demo, optional Anthropic-generated lines, optional Maya speech synthesis, and an optional Twilio human-call path. The demo does not place a phone call or require an LLM or TTS credential; Google sign-in is still required before a negotiation can start so records remain private.
+
+Ringside is deliberately explicit about its current boundaries. Its research layer is a local metadata-aware keyword store, not embeddings or a vector database. Bill extraction is local text/OCR plus heuristics, not a cloud document model. Human calls use Twilio Gather speech capture, not a persistent media-stream runtime.
+
+## How it works
+
+```mermaid
+flowchart LR
+  A[Upload or enter a bill] --> B[Extract and confirm details]
+  B --> C[Add local research context]
+  C --> D[Set target and negotiation constraints]
+  D --> E{Connection mode}
+  E -->|Demo| F[Local AI-vs-AI negotiation]
+  E -->|Real call| G[Twilio call and Gather speech]
+  F --> H[Verify the final offer]
+  G --> H
+  H --> I[Private report and history]
 ```
 
-Demo mode uses the same lever-based state machine as a real call. Only the phone transport is simulated. No Twilio, Maya, Anthropic, OCR provider, or web research key is required for this path. Neon is optional in local development; production requires it.
+## Product flow
 
-## Run locally
+| Route | Purpose |
+| --- | --- |
+| `/` | Landing page and product overview. |
+| `/new` | Upload a bill or enter details, review the extraction, add a target, and select Demo or Real Call mode. |
+| `/login` | Google-only sign-in that preserves the in-progress negotiation draft. |
+| `/call/:id` | Live dashboard with scoped SSE events, transcript, offer movement, and call state. |
+| `/negotiation/:id` | Durable report with verification, strategy, research sources, and transcript. |
+| `/history` | Owner-scoped negotiation history and savings summary. |
+
+## Features
+
+### Bill intelligence
+
+- Upload PDF, PNG, JPEG, TXT, Markdown, or JSON bills up to 8 MB.
+- Read PDF text with local `pdftotext` when installed and images with local Tesseract when installed.
+- Parse provider, plan, monthly price, selected charges, speed, and account/invoice identifiers.
+- Mask account and invoice identifiers before returning extracted details to the browser.
+- Fall back to manual confirmation when text cannot be read.
+
+### Negotiation engine
+
+- Track the current bill, target price, maximum acceptable price, turn budget, and negotiation levers.
+- Use deterministic fallback lines for provider-independent demo mode.
+- Optionally use Anthropic for generated lines while keeping the policy layer in control of the final spoken text.
+- Filter instruction-like content in bill text, notes, and human speech before it reaches negotiation state.
+- Verify a final offer before presenting it as a win and calculate monthly and annual savings.
+
+### Research
+
+- Ingest local text, Markdown, or JSON knowledge sources.
+- Chunk documents and attach source, company, category, plan, country, and timestamp metadata.
+- Retrieve with keyword overlap, recency weighting, and exact metadata filters.
+- Include retrieved local sources in the negotiation research context and report.
+
+### Voice and runtime
+
+- Run an AI-vs-AI demo that emits the same lifecycle events used by the dashboard.
+- Place optional Twilio calls to a human phone number.
+- Collect human responses through Twilio `<Gather input="speech">`.
+- Generate optional Maya TTS audio, resample it with ffmpeg to 8 kHz WAV, and use TwiML `<Say>` if audio is unavailable.
+- Scope live dashboard events to the signed-in negotiation owner.
+
+## Quick start
+
+### Prerequisites
+
+- Node.js 20 or later
+- npm
+- A Google OAuth web client for sign-in
+- Optional: `pdftotext` for PDFs, Tesseract for image OCR, and ffmpeg for Maya-generated call audio
+
+Install the root and frontend dependencies:
 
 ```bash
+git clone https://github.com/AnuragTummapudi/Ringside.git
+cd Ringside
 npm install
+(cd frontend && npm install)
 cp .env.example .env
+```
+
+Configure Google OAuth in `.env` and add this redirect URI to the OAuth client for local development:
+
+```text
+http://localhost:3000/auth/google/callback
+```
+
+Build the frontend and start the Express service:
+
+```bash
 npm run build
 npm run dev
 ```
 
-Open http://localhost:3000. `npm run build` compiles the React app into `public/`; `npm run dev` runs the Express server and serves that build.
+Open [http://localhost:3000](http://localhost:3000). `npm run build` clears old Vite bundles and rebuilds `public/`; `npm run dev` serves that output and the API from port `3000`.
 
-For frontend-only development:
+For frontend-only iteration, use a second terminal:
 
 ```bash
 cd frontend
-npm install
 npm run dev
 ```
 
-## Default demo
+Vite runs on its default development port. Set `VITE_API_BASE` in the frontend environment when it must call an API hosted on a different origin.
 
-The polished sample scenario is in `sample-bills/airtel-demo.txt`:
+## Demo mode
 
-```text
-Provider: Airtel
-Plan: Xstream Fiber 500 Mbps
-Monthly bill: Rs 1499
-Customer tenure: 3 years
-Comparable market offer: Rs 999
-```
+Demo mode is the recommended local path. After Google sign-in, create a negotiation from `/new`, choose **Demo mode**, and start it. The server runs a deterministic AI-vs-AI negotiation and streams call-state events to the dashboard. It does not create a Twilio call, use Anthropic, or require Maya TTS.
 
-The upload extractor supports PDF, PNG, JPG, JPEG, TXT, Markdown, and JSON. Selectable PDF text is read with `pdftotext` when installed. Images use `tesseract` when installed. If neither local tool is available, the UI keeps manual entry available and marks extraction as needing confirmation.
-
-## Architecture
-
-```text
-React/Vite
-  /new -> upload/manual entry -> preview -> start
-  /call/:id -> scoped SSE transcript and offer dashboard
-  /negotiation/:id -> durable report and transcript
-  /history -> saved results and savings metrics
-          |
-          v
-Express
-  bill.js       layered extraction, normalization, masking
-  rag.js        local chunking + keyword/metadata hybrid retrieval
-  negotiate.js  guarded lever state machine and offer policy
-  report.js     verification, savings, outcome, report generation
-  tts.js        Maya adapter, timeout, fallback cache, cleanup
-  server.js     API, SSE, demo transport, Twilio transport, auth guards
-          |
-          v
-Neon Postgres          production users, sessions, negotiations, and bills
-data/ringside.json     local development fallback and RAG knowledge store
-```
-
-The local RAG layer is intentionally small and dependency-free. It stores chunks and metadata in JSON, ranks keyword overlap plus recency, and filters by metadata. It is a truthful local fallback, not a pretend embedding service. The `rag.js` interfaces are the seam where PostgreSQL/pgvector or a hosted retriever can be added later.
-
-## RAG ingestion
-
-Ingest a text, Markdown, or JSON knowledge source:
+To add local research before starting a negotiation:
 
 ```bash
 npm run rag:ingest -- sample-bills/airtel-demo.txt pricing Airtel
-npm run rag:ingest -- sample-bills/negotiation-scenarios.txt scenarios Ringside
 ```
 
-The command stores chunks with `source`, `company`, `category`, `documentType`, `country`, `plan`, and `createdAt` metadata. Retrieval is available through:
+The sample bill is synthetic. It is safe to use for local exploration and demonstrates extraction plus local research retrieval.
+
+## Real voice calls
+
+Real Call mode is optional and should be configured separately from the local demo. It requires:
+
+1. A Twilio account and a Voice-capable Ringside number.
+2. `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_RINGSIDE_NUMBER`.
+3. A public HTTPS URL in `NGROK_URL`. During local development, run `ngrok http 3000`; in production, use the deployed backend URL.
+4. Maya credentials and ffmpeg for generated audio, or accept the TwiML `<Say>` fallback.
+
+The supplied phone number in Real Call mode is the number Ringside will call. On a Twilio trial account, the destination must be verified and the destination country's voice permissions must be enabled.
+
+Before placing a call, the server checks `NGROK_URL/healthz`. In production, keep `REQUIRE_TWILIO_SIGNATURES=true` and do not enable `PUBLIC_OUTBOUND_CALLS_ENABLED` until the deployment is ready for real outbound calls.
+
+## Bill intelligence
+
+The upload endpoint stores a temporary file in `data/uploads`, extracts up to 20,000 characters, and removes the temporary upload after processing. Directly readable text files use the local filesystem. PDF extraction uses `pdftotext`; image extraction uses Tesseract. If either executable is unavailable or no usable text is found, the API returns `needs_confirmation` and the UI keeps manual entry available.
+
+The parser returns heuristic confidence values for selected fields. They are field-presence signals, not a calibrated document-understanding score. Review and edit extracted values before starting a negotiation.
+
+## RAG and research
+
+Ringside's current RAG implementation is intentionally lightweight:
 
 ```text
-POST /api/rag/search
-POST /api/research
+Local text file
+  -> overlapping character chunks
+  -> JSON storage with metadata
+  -> keyword overlap + recency scoring
+  -> metadata filtering
+  -> negotiation research context
 ```
 
-Research responses identify whether local sources were actually found. Reports do not claim external research when none was available.
+It does not use an embedding model, vector store, external web search, or automatic source crawler. This makes local behavior inspectable but also means research quality depends on the documents you ingest. See [docs/architecture.md](docs/architecture.md) for implementation details.
 
-## Negotiation engine
+## Architecture
 
-The engine keeps the existing levers and hard policy checks:
+```mermaid
+flowchart TB
+  UI[React/Vite client] -->|HTTP and SSE| API[Express server]
+  API --> OAuth[Google OAuth]
+  API --> DB[Neon Postgres in production]
+  API --> Local[Local JSON in development]
+  API --> Bills[Bill extraction]
+  API --> RAG[Local hybrid retrieval]
+  API --> Engine[Negotiation engine and policy]
+  Engine -. optional .-> Anthropic[Anthropic]
+  API -. optional .-> Maya[Maya TTS + ffmpeg]
+  API -. optional .-> Twilio[Twilio Voice and TwiML]
+```
 
-- loyalty and comparable pricing
-- escalation and retention review
-- offer extraction
-- target and acceptance threshold
-- maximum turns
-- prompt-injection filtering for company, notes, and speech
-- spoken-text sanitization
-- no fabricated offer acceptance above the policy ceiling
+The server keeps active call state in memory. Completed records are persisted. A process restart therefore ends any active in-memory call session; production deployments should account for that operational constraint.
 
-The model receives filtered, labeled context. It never receives a user-controlled string as an instruction block. Model reasoning is not sent to the browser; the dashboard exposes only structured status such as listening, negotiating, and verifying.
+## Deployment
 
-## Voice transports
+`railway.json` deploys the Express backend. It installs both package trees, builds the frontend from source, and then starts `node server.js`. Configure the production environment with `NODE_ENV=production`, Google OAuth, `AUTH_SESSION_SECRET`, `DATABASE_URL`, and the appropriate `ALLOWED_ORIGINS`. Production startup intentionally fails when Neon or Google OAuth is absent.
 
-### Demo mode
+`vercel.json` is a frontend-only configuration. It builds `frontend/` into `public/` and rewrites browser routes to the React entry point. When Vercel hosts the frontend separately, set `VITE_API_BASE` to the backend's HTTPS URL and add the Vercel origin to the backend's `ALLOWED_ORIGINS`. Twilio webhooks must always target the backend, not the Vercel frontend.
 
-`POST /api/call/start` with `mode: "agent"` uses the local demo transport by default. It emits the same `call_answered`, `turn_playing`, `call_resolved`, and error events used by the dashboard.
+## Configuration
 
-### Twilio mode
+Copy `.env.example` to `.env`. Keep all real values out of Git.
 
-Send `transport: "twilio"` for Agent Mode or use `mode: "human"` for a real call. Twilio needs a reachable `NGROK_URL`, account credentials, and a Ringside number. Maya audio is optional because the existing fallback cache and TwiML `<Say>` path remain available.
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `NODE_ENV` | Yes | `development` locally; `production` enforces Neon and Google OAuth at startup. |
+| `PORT` | Yes | Express listen port; defaults to `3000`. |
+| `APP_URL` | Recommended | Base URL used to derive the OAuth callback when `GOOGLE_REDIRECT_URI` is absent. |
+| `ALLOWED_ORIGINS` | When split frontend/API | Comma-separated browser origins allowed by CORS. |
+| `GOOGLE_CLIENT_ID` | Yes for sign-in | Google OAuth web client ID. |
+| `GOOGLE_CLIENT_SECRET` | Yes for sign-in | Google OAuth client secret; server-side only. |
+| `GOOGLE_REDIRECT_URI` | Yes for sign-in | Exact OAuth callback URL. |
+| `AUTH_SESSION_SECRET` | Yes | HMAC secret for OAuth state. Required in production. |
+| `AUTH_COOKIE_SAME_SITE` | No | Cookie policy: `lax`, `strict`, or `none`. |
+| `AUTH_COOKIE_SECURE` | No | Force secure cookies outside production when needed. |
+| `DATABASE_URL` | Required in production | Neon PostgreSQL connection string. Local development uses JSON when absent. |
+| `ANTHROPIC_API_KEY` | No | Enables Anthropic-generated negotiation lines outside demo transport. |
+| `MAYA_API_KEY` | No | Enables Maya speech synthesis. |
+| `RINGSIDE_VOICE_ID` | With Maya | Maya voice ID for Ringside. |
+| `REP_VOICE_ID` | With Maya | Maya voice ID for the demo representative. |
+| `TWILIO_ACCOUNT_SID` | Real calls | Twilio account identifier. |
+| `TWILIO_AUTH_TOKEN` | Real calls | Twilio webhook validation and API credential. |
+| `TWILIO_RINGSIDE_NUMBER` | Real calls | Voice-capable Twilio number in E.164 format. |
+| `TWILIO_REP_NUMBER` | Optional agent call path | Default destination for the Twilio agent-call path. |
+| `NGROK_URL` | Real calls | Public HTTPS base URL used for TwiML, audio, and status callbacks. |
+| `RINGSIDE_API_TOKEN` | Internal API access | Enables access to the internal `/api/negotiate` endpoint and production call gating. |
+| `PUBLIC_OUTBOUND_CALLS_ENABLED` | Production only | Explicitly permits public outbound call starts. Defaults to `false`. |
+| `REQUIRE_TWILIO_SIGNATURES` | Production | Forces Twilio request signature validation outside production. |
+| `TTS_CONCURRENCY` | No | Maximum parallel TTS generation tasks. |
+| `TTS_TIMEOUT_MS` | No | Maya request timeout in milliseconds. |
+| `AUDIO_RETENTION_MS` | No | Per-call generated-audio cleanup delay in milliseconds. |
 
-Anthropic improves generated speech, but the deterministic fallback lines keep the call flow demonstrable when the provider is unavailable. The local demo explicitly skips external LLM calls for low latency and zero-key reliability.
+`NEON_DATABASE_URL` is also recognized as a fallback connection-string name. `MAYA_LIST_VOICES=true` only enables optional voice discovery inside the TTS smoke test.
 
-## Bill and negotiation APIs
+## API
+
+All JSON endpoints are served by the Express process. Owner-scoped endpoints require the Google session cookie; Twilio endpoints are internal webhook endpoints.
+
+| Method | Endpoint | Access | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/healthz` | Public | Deployment and webhook reachability check. |
+| `GET` | `/api/auth/config` | Public | Returns sign-in and persistence configuration status. |
+| `GET` | `/api/auth/me` | Public | Returns the current user or `null`. |
+| `GET` | `/auth/google` | Public | Begins Google OAuth. |
+| `GET` | `/auth/google/callback` | Google callback | Completes OAuth and creates a session. |
+| `POST` | `/api/auth/logout` | Session | Ends the current session. |
+| `POST` | `/api/bills/upload` | Public processing | Accepts one supported bill file and returns masked extraction data. |
+| `POST` | `/api/bills/extract` | Public processing | Parses manually supplied bill text. |
+| `POST` | `/api/rag/search` | Public | Searches locally ingested knowledge. |
+| `POST` | `/api/research` | Public | Builds local research context from supplied negotiation data. |
+| `POST` | `/api/call/start` | Session | Starts demo, agent, or human call execution. |
+| `POST` | `/api/negotiations` | Session | Compatibility route that starts a demo negotiation. |
+| `GET` | `/api/events?callId=...` | Session | Scoped SSE stream for an active call. |
+| `GET` | `/api/state/:callId` | Session | Active or persisted call state. |
+| `GET` | `/api/calls` | Session | Owner-scoped history. |
+| `GET` | `/api/negotiations/:callId` | Session | Durable negotiation record. |
+| `POST` | `/api/verify-offer` | Session | Applies final-offer verification rules. |
+| `POST` | `/api/call/:callId/pause` | Session | Marks an active call paused. |
+| `POST` | `/api/call/:callId/resume` | Session | Marks an active call live. |
+| `POST` | `/api/call/:callId/end` | Session | Finalizes an active call. |
+| `POST` | `/api/negotiate` | Internal token | Runs a text negotiation without the browser flow. |
+| `POST` | `/twiml/*` | Twilio webhook | TwiML and speech-gather call handlers. |
+| `POST` | `/api/call-status` | Twilio webhook | Receives Twilio call status callbacks. |
+
+## Project structure
 
 ```text
-POST /api/bills/upload       multipart field: bill
-POST /api/bills/extract      JSON text fallback
-POST /api/research           build local research context
-POST /api/rag/search         hybrid retrieval
-POST /api/negotiations       create a local demo negotiation
-POST /api/call/start         compatible call creation endpoint
-GET  /api/events             scoped SSE stream
-GET  /api/state/:id          active or durable negotiation state
-GET  /api/negotiations/:id   durable report and transcript
-GET  /api/calls              authenticated, owner-scoped history
-POST /api/verify-offer       policy-aware final-offer verification
-POST /api/call/:id/pause     takeover architecture hook
-POST /api/call/:id/resume    takeover architecture hook
-POST /api/call/:id/end       end-call architecture hook
+Ringside/
+├── frontend/                  # React/Vite application and source assets
+│   └── src/
+│       ├── components/        # Landing and shared UI
+│       └── pages/             # Product routes
+├── public/                    # Built frontend served by Express
+├── sample-bills/              # Synthetic local demo fixtures
+├── docs/
+│   ├── architecture.md        # Runtime boundaries and providers
+│   └── troubleshooting.md     # OAuth, Twilio, OCR, and deployment help
+├── auth.js                    # Google OAuth and session handling
+├── bill.js                    # Local extraction and client-side masking
+├── negotiate.js               # Negotiation state machine
+├── policy.js                  # Input/output safety policy
+├── rag.js                     # Local chunking and retrieval
+├── persistence.js             # Neon/local persistence adapter
+├── report.js                  # Offer verification and reports
+├── server.js                  # API, SSE, demo runtime, and Twilio webhooks
+├── storage.js                 # Local JSON development store
+└── tts.js                     # Maya synthesis and ffmpeg conversion
 ```
 
-Existing `/api/negotiate` and `/twiml/*` endpoints remain available for compatibility.
-
-## Environment
-
-Copy `.env.example` to `.env`. Important groups:
-
-```dotenv
-# App and cookies
-PORT=3000
-NODE_ENV=development
-APP_URL=http://localhost:3000
-ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
-
-# Google OAuth - the only end-user sign-in method
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-GOOGLE_REDIRECT_URI=http://localhost:3000/auth/google/callback
-AUTH_SESSION_SECRET=
-AUTH_COOKIE_SAME_SITE=lax
-AUTH_COOKIE_SECURE=false
-
-# Neon Postgres - mandatory in production
-DATABASE_URL=
-
-# Anthropic (optional for local demo)
-ANTHROPIC_API_KEY=
-
-# Maya (optional; fallback speech remains available)
-MAYA_API_KEY=
-RINGSIDE_VOICE_ID=Ananya
-REP_VOICE_ID=Arjun
-
-# Twilio (required for real phone calls)
-TWILIO_ACCOUNT_SID=
-TWILIO_AUTH_TOKEN=
-TWILIO_RINGSIDE_NUMBER=
-TWILIO_REP_NUMBER=
-NGROK_URL=
-
-# Production guardrails
-RINGSIDE_API_TOKEN=
-PUBLIC_OUTBOUND_CALLS_ENABLED=false
-REQUIRE_TWILIO_SIGNATURES=false
-TTS_CONCURRENCY=3
-TTS_TIMEOUT_MS=8000
-AUDIO_RETENTION_MS=900000
-
-# Local document/RAG settings
-DEMO_MODE=true
-MAX_UPLOAD_MB=8
-RAG_STORAGE=local-json
-```
-
-To configure Google, create a Google Cloud OAuth Web application and add `${APP_URL}/auth/google/callback` as an authorized redirect URI. For a split frontend and API deployment, use `AUTH_COOKIE_SAME_SITE=none`, `AUTH_COOKIE_SECURE=true`, and list the frontend URL in `ALLOWED_ORIGINS`.
-
-Create a Neon database, set `DATABASE_URL`, then apply the idempotent schema setup:
+## Development
 
 ```bash
-npm run db:migrate
-```
-
-Production startup refuses to run without both Neon and Google OAuth. Production outbound calling is closed unless explicitly enabled or authenticated. Twilio webhook signatures are required in production. CORS, request size, upload size, filename, audio access, CallSid binding, signed OAuth state, hashed opaque sessions, owner-scoped records, and SSE scope are all enforced in the backend.
-
-## Persistence and privacy
-
-In production, Neon stores Google account profiles, hashed opaque session tokens, owner-scoped negotiations, and sanitized bill metadata. Google refresh tokens are not requested or stored. The app only asks Google for `openid`, `email`, and `profile`; only a verified email may create a session. Session cookies are HTTP-only and same-site by default.
-
-The local fallback is `data/ringside.json`, created at runtime and ignored by Git. It is for local development only. Uploaded temporary files are removed after extraction; account and invoice identifiers are masked before reaching the UI or report. Define retention and deletion processes before handling production customer data.
-
-## Tests
-
-Run the focused checks:
-
-```bash
-npm run test:guardrails
-npm run preflight
-npm run test:negotiate
-npm run test:tts
+# Build the production frontend output
 npm run build
+
+# Type-check the frontend without producing a new app bundle
+npm run typecheck
+
+# Start the API and built frontend on port 3000
+npm run dev
+
+# Prepare the production Neon schema
+npm run db:migrate
+
+# Ingest a local research document
+npm run rag:ingest -- path/to/document.txt category CompanyName
 ```
 
-`test:guardrails` covers config bounds, prompt injection rejection, offer ceilings, sanitization, and unknown-action blocking. `preflight` checks the production security wiring, Google-only authentication, and owner-scoped persistence. `test:negotiate` may report provider fallback when the configured Anthropic key is absent or invalid; that is expected for the local deterministic path.
+There is no lint script configured in this repository. The frontend build runs TypeScript project checking before Vite bundles the client.
 
-## Production follow-up
+## Testing
 
-This implementation is not a claim of perfect security. The next production gates are rate and cost quotas, idempotent Twilio event storage, a real OCR/embedding/research provider, streaming STT/TTS, human takeover signaling, formal extraction schema validation, deletion workflows, and end-to-end testing against live providers.
+```bash
+# Deterministic guardrails and negotiation-engine tests
+npm test
+
+# Static deployment, auth, persistence, and safety checks
+npm run preflight
+
+# Optional external Maya synthesis smoke test
+npm run test:tts
+```
+
+`npm test` covers the policy firewall and deterministic negotiation behavior. `npm run preflight` verifies important static wiring, including production defaults, owner scoping, Twilio signature middleware, and audio access controls. There is currently no browser end-to-end test suite or measured coverage report.
+
+## Troubleshooting
+
+See [docs/troubleshooting.md](docs/troubleshooting.md) for OAuth redirect mismatch, Twilio webhook failures, local OCR prerequisites, TTS audio, and production-startup guidance.
+
+## Security
+
+- Keep `.env` and `.env.*` out of Git; only `.env.example` is tracked.
+- OAuth tokens, provider credentials, Twilio credentials, and database URLs remain server-side.
+- Sessions are opaque `HttpOnly` cookies and are persisted as hashes.
+- Negotiations, SSE events, state, reports, and history are owner-scoped.
+- Production startup rejects missing Neon or Google OAuth configuration, and production outbound calls default to closed.
+- Review [SECURITY.md](SECURITY.md) before reporting a vulnerability.
+
+## Privacy
+
+Bills, extracted billing details, phone numbers, call transcripts, and negotiation history can contain sensitive personal information. Temporary uploads are removed after processing. Signed-in bill records and negotiation records are persisted to Neon in production or local JSON during development. Generated per-call audio is scheduled for cleanup using `AUDIO_RETENTION_MS`; fallback cache audio is managed separately.
+
+This repository does not currently expose a self-service deletion workflow, a data-retention dashboard, or a legal/privacy policy. Do not upload real customer data to a deployment unless its storage, retention, consent, and deletion obligations have been reviewed for the intended jurisdiction.
+
+## Contributing
+
+1. Fork the repository and create a focused branch.
+2. Keep provider keys and customer data out of commits.
+3. Run `npm run build`, `npm test`, and `npm run preflight` before opening a pull request.
+4. Update the README or relevant document when behavior, setup, or security boundaries change.
+
+## License
+
+This repository does not currently include a license file. Do not assume permission to redistribute or reuse it until the maintainer selects and adds a license.
