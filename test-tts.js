@@ -1,5 +1,5 @@
-// Quick test for Maya TTS API — lists voices and generates one sample audio file.
-// Usage: node test-tts.js
+// Quick test for Maya TTS API — generates one sample audio file.
+// Usage: node test-tts.js; set MAYA_LIST_VOICES=true to also probe voice discovery.
 // Requires: MAYA_API_KEY in .env
 require('dotenv').config();
 const axios = require('axios');
@@ -75,6 +75,7 @@ async function testGenerate(voiceId, text = "Hi, I'm calling about my internet b
     } else {
       console.error('❌ Request error:', err.message);
     }
+    throw err;
   }
 }
 
@@ -85,8 +86,11 @@ async function main() {
   }
   console.log('Maya API key: set ✓');
 
-  await listVoices();
+  if (process.env.MAYA_LIST_VOICES === 'true') await listVoices();
   await testGenerate(process.env.RINGSIDE_VOICE_ID || process.env.REP_VOICE_ID);
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  console.error('TTS smoke test failed:', err.message);
+  process.exit(1);
+});
