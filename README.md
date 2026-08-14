@@ -348,4 +348,4 @@ This repository does not currently expose a self-service deletion workflow, a da
 
 ## License
 
-This repository does not currently include a license file. Do not assume permission to redistribute or reuse it until the maintainer selects and adds a license.
+Ringside is licensed under the [MIT License](LICENSE).
