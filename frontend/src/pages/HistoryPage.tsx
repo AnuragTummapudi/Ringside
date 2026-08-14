@@ -1,166 +1,51 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowRight, Bot, Phone, CheckCircle, Clock, TrendingDown } from 'lucide-react'
+import { ArrowRight, BarChart3, Bot, CheckCircle2, Clock3, Phone, TrendingDown } from 'lucide-react'
 import LogoIcon from '../components/LogoIcon'
 import { API_BASE } from '../api'
 
-interface CallSummary {
-  callId: string
-  company: string
-  mode: string
-  currentPrice: number
-  targetPrice: number
-  startedAt: string
-  resolved: boolean
-  finalPrice: number | null
-  resolutionReason: string | null
-}
+interface CallSummary { callId: string; company: string; mode: string; currentPrice: number; targetPrice: number; startedAt: string; resolved: boolean; finalPrice: number | null; resolutionReason: string | null; report?: { outcome?: string; monthlySavings?: number; annualSavings?: number; turns?: number } }
+type Filter = 'all' | 'won' | 'best_offer' | 'in_progress'
+
+function money(value: number | null | undefined) { return value == null ? '—' : `₹${value.toLocaleString('en-IN')}` }
 
 export default function HistoryPage() {
   const [calls, setCalls] = useState<CallSummary[]>([])
+  const [filter, setFilter] = useState<Filter>('all')
+  const [sort, setSort] = useState<'newest' | 'savings'>('newest')
   const [loading, setLoading] = useState(true)
+  const [authRequired, setAuthRequired] = useState(false)
   const navigate = useNavigate()
-
   useEffect(() => {
-    fetch(`${API_BASE}/api/calls`)
-      .then((r) => r.json())
-      .then((data) => { setCalls(data); setLoading(false) })
-      .catch(() => setLoading(false))
-
-    // Refresh every 5s for live updates
-    const id = setInterval(() => {
-      fetch(`${API_BASE}/api/calls`).then((r) => r.json()).then(setCalls).catch(() => {})
-    }, 5000)
-    return () => clearInterval(id)
+    const load = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/calls`, { credentials: 'include' })
+        if (response.status === 401) {
+          setAuthRequired(true)
+          setCalls([])
+          return
+        }
+        const data = await response.json()
+        setCalls(Array.isArray(data) ? data : [])
+      } catch {
+        setCalls([])
+      } finally {
+        setLoading(false)
+      }
+    }
+    void load()
+    const timer = window.setInterval(() => void load(), 5000)
+    return () => window.clearInterval(timer)
   }, [])
+  const filtered = useMemo(() => calls.filter((call) => filter === 'all' || filter === 'in_progress' && !call.resolved || filter === 'won' && call.report?.outcome === 'won' || filter === 'best_offer' && call.report?.outcome === 'best_offer').sort((a, b) => sort === 'savings' ? (b.report?.monthlySavings || 0) - (a.report?.monthlySavings || 0) : new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()), [calls, filter, sort])
+  const totalSaved = calls.reduce((sum, call) => sum + (call.report?.monthlySavings || (call.finalPrice ? Math.max(0, call.currentPrice - call.finalPrice) : 0)), 0)
+  const wins = calls.filter((call) => call.report?.outcome === 'won').length
+  const completed = calls.filter((call) => call.resolved).length
+  const successRate = completed ? Math.round((wins / completed) * 100) : 0
 
-  const savings = (c: CallSummary) =>
-    c.finalPrice != null ? c.currentPrice - c.finalPrice : null
-
-  return (
-    <div className="min-h-screen bg-[#F5F5F5]">
-      {/* Nav */}
-      <nav className="px-8 py-5 flex items-center justify-between border-b border-[#E5E5E5] bg-white">
-        <Link to="/" className="flex items-center gap-2 text-black">
-          <LogoIcon className="w-6 h-6" />
-          <span className="text-lg font-medium" style={{ letterSpacing: '-0.03em' }}>Ringside</span>
-        </Link>
-        <button
-          onClick={() => navigate('/new')}
-          className="inline-flex items-center gap-2 bg-black text-white text-sm font-medium pl-5 pr-1.5 py-1.5 rounded-full hover:bg-gray-900 transition-colors duration-200"
-        >
-          New negotiation
-          <span className="bg-white rounded-full p-1.5">
-            <ArrowRight className="w-3.5 h-3.5 text-black" />
-          </span>
-        </button>
-      </nav>
-
-      <div className="max-w-5xl mx-auto px-8 py-14">
-        {/* Header */}
-        <div className="flex items-end justify-between mb-10">
-          <div>
-            <p className="text-black/40 text-xs font-medium tracking-[.12em] uppercase mb-2">All sessions</p>
-            <h1 className="text-4xl font-medium text-black" style={{ letterSpacing: '-0.03em' }}>
-              History
-            </h1>
-          </div>
-          {calls.length > 0 && (
-            <p className="text-black/40 text-sm">{calls.length} negotiation{calls.length !== 1 ? 's' : ''}</p>
-          )}
-        </div>
-
-        {/* Content */}
-        {loading ? (
-          <div className="text-black/30 text-sm py-16 text-center">Loading…</div>
-        ) : calls.length === 0 ? (
-          <EmptyState />
-        ) : (
-          <div className="flex flex-col gap-3">
-            {calls.map((c) => {
-              const saved = savings(c)
-              const inProgress = !c.resolved && c.finalPrice == null
-              return (
-                <div
-                  key={c.callId}
-                  onClick={() => navigate(`/call/${c.callId}`)}
-                  className="bg-white border border-[#E5E5E5] rounded-2xl px-6 py-5 flex items-center gap-6 cursor-pointer hover:border-black/20 hover:shadow-sm transition-all duration-200"
-                >
-                  {/* Status icon */}
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
-                    inProgress ? 'bg-amber-50 text-amber-600' :
-                    c.resolutionReason === 'accepted' ? 'bg-green-50 text-green-600' :
-                    'bg-black/5 text-black/40'
-                  }`}>
-                    {inProgress ? <Clock className="w-5 h-5" /> :
-                     c.resolutionReason === 'accepted' ? <CheckCircle className="w-5 h-5" /> :
-                     <TrendingDown className="w-5 h-5" />}
-                  </div>
-
-                  {/* Company + meta */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="font-medium text-black text-base truncate">{c.company || 'Unknown'}</span>
-                      <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
-                        c.mode === 'human'
-                          ? 'bg-blue-50 text-blue-600'
-                          : 'bg-black/5 text-black/50'
-                      }`}>
-                        {c.mode === 'human' ? <Phone className="w-3 h-3" /> : <Bot className="w-3 h-3" />}
-                        {c.mode === 'human' ? 'Real call' : 'AI vs AI'}
-                      </span>
-                    </div>
-                    <p className="text-black/40 text-xs">
-                      {new Date(c.startedAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
-                    </p>
-                  </div>
-
-                  {/* Prices */}
-                  <div className="text-right flex-shrink-0">
-                    <div className="flex items-baseline gap-2 justify-end mb-0.5">
-                      <span className="text-black/30 text-sm line-through">₹{c.currentPrice?.toLocaleString('en-IN')}</span>
-                      {c.finalPrice != null && (
-                        <span className="text-black font-medium text-base">₹{c.finalPrice.toLocaleString('en-IN')}</span>
-                      )}
-                      {inProgress && (
-                        <span className="text-amber-600 text-sm font-medium">In progress</span>
-                      )}
-                    </div>
-                    {saved != null && saved > 0 && (
-                      <p className="text-green-600 text-xs font-medium">−₹{saved.toLocaleString('en-IN')}/mo saved</p>
-                    )}
-                    {c.resolutionReason === 'budget_exhausted' && (
-                      <p className="text-black/30 text-xs">Best offer reached</p>
-                    )}
-                  </div>
-
-                  <ArrowRight className="w-4 h-4 text-black/20 flex-shrink-0" />
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
-    </div>
-  )
+  return <main className="min-h-screen bg-[#F5F5F5] text-black"><header className="border-b border-[#E5E5E5] bg-white"><div className="ringside-page-container flex h-[72px] items-center justify-between"><Link to="/" className="flex items-center gap-2"><LogoIcon className="h-7 w-7" /><span className="text-xl font-semibold tracking-[-0.04em]">Ringside</span></Link><Link to="/new" className="interactive-cta inline-flex items-center gap-2 rounded-full bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#2a2a2a]">New negotiation <ArrowRight className="h-4 w-4" /></Link></div></header><div className="ringside-page-container py-8 md:py-12">{authRequired ? <section className="rounded-2xl border border-[#E5E5E5] bg-white px-6 py-20 text-center"><BarChart3 className="mx-auto mb-4 h-6 w-6 text-[#B291E6]" /><h1 className="text-2xl font-semibold tracking-[-0.04em]">Your record is private.</h1><p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-black/42">Sign in with Google to access the negotiations associated with your account.</p><Link to="/login?returnTo=/history" className="interactive-cta mt-6 inline-flex items-center gap-2 rounded-full bg-black px-4 py-2.5 text-sm font-semibold text-white">Sign in <ArrowRight className="h-4 w-4" /></Link></section> : <><div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-black/42">Your record</p><h1 className="text-4xl font-semibold tracking-[-0.06em] md:text-5xl">Negotiation history</h1><p className="mt-3 text-sm text-black/48">A durable record of what Ringside tried and what it saved.</p></div><span className="text-sm text-black/42">{calls.length} session{calls.length === 1 ? '' : 's'}</span></div><div className="mb-8 grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-[#E5E5E5] bg-[#E5E5E5] md:grid-cols-4"><Metric label="Monthly savings" value={money(totalSaved)} /><Metric label="Negotiations" value={String(calls.length)} /><Metric label="Success rate" value={`${successRate}%`} /><Metric label="Completed" value={String(completed)} /></div><div className="mb-5 flex flex-col justify-between gap-3 border-b border-[#E5E5E5] pb-4 md:flex-row md:items-center"><div className="flex flex-wrap gap-1">{(['all', 'won', 'best_offer', 'in_progress'] as Filter[]).map((item) => <button key={item} type="button" onClick={() => setFilter(item)} className={`rounded-full px-3 py-2 text-xs font-semibold transition ${filter === item ? 'bg-[#2B2644] text-white' : 'text-black/45 hover:bg-white hover:text-black'}`}>{item === 'all' ? 'All' : item === 'won' ? 'Won' : item === 'best_offer' ? 'Best offer' : 'In progress'}</button>)}</div><label className="flex items-center gap-2 text-xs text-black/45">Sort<select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)} className="rounded-lg border border-[#E5E5E5] bg-white px-2 py-1.5 text-xs text-black outline-none"><option value="newest">Newest</option><option value="savings">Largest savings</option></select></label></div>{loading ? <div className="rounded-2xl border border-[#E5E5E5] bg-white py-20 text-center text-sm text-black/40">Loading your record…</div> : filtered.length === 0 ? <EmptyState /> : <div className="overflow-hidden rounded-2xl border-y border-[#E5E5E5] bg-white">{filtered.map((call) => <HistoryRow key={call.callId} call={call} onClick={() => navigate(`/negotiation/${call.callId}`)} />)}</div>}</>}</div></main>
 }
 
-function EmptyState() {
-  const navigate = useNavigate()
-  return (
-    <div className="flex flex-col items-center justify-center py-24 text-center">
-      <div className="w-16 h-16 rounded-2xl bg-white border border-[#E5E5E5] flex items-center justify-center mb-6">
-        <TrendingDown className="w-7 h-7 text-black/20" />
-      </div>
-      <h2 className="text-xl font-medium text-black mb-2" style={{ letterSpacing: '-0.02em' }}>No negotiations yet</h2>
-      <p className="text-black/40 text-sm mb-8">Start your first call to see results here.</p>
-      <button
-        onClick={() => navigate('/new')}
-        className="inline-flex items-center gap-3 bg-black text-white text-base font-medium pl-8 pr-2 py-2 rounded-full hover:bg-gray-900 transition-colors duration-200"
-      >
-        Start a negotiation
-        <span className="bg-white rounded-full p-2"><ArrowRight className="w-4 h-4 text-black" /></span>
-      </button>
-    </div>
-  )
-}
+function Metric({ label, value }: { label: string; value: string }) { return <div className="bg-white px-4 py-5 md:px-6"><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-black/40">{label}</p><p className="mt-2 text-2xl font-semibold tracking-[-0.06em]">{value}</p></div> }
+function HistoryRow({ call, onClick }: { call: CallSummary; onClick: () => void }) { const inProgress = !call.resolved; const saved = call.report?.monthlySavings ?? (call.finalPrice ? Math.max(0, call.currentPrice - call.finalPrice) : 0); return <button type="button" onClick={onClick} className="grid w-full grid-cols-[1fr_auto] items-center gap-4 border-b border-[#E5E5E5] px-4 py-5 text-left transition hover:bg-[#F7F4FB] md:grid-cols-[minmax(180px,1.2fr)_minmax(180px,1fr)_minmax(130px,.65fr)_auto] md:px-6"><div className="flex items-center gap-3"><span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${inProgress ? 'bg-amber-50 text-amber-600' : saved > 0 ? 'bg-[#F5F2FB] text-[#624799]' : 'bg-black/5 text-black/35'}`}>{inProgress ? <Clock3 className="h-4 w-4" /> : saved > 0 ? <CheckCircle2 className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}</span><span><span className="flex items-center gap-2 text-sm font-semibold">{call.company || 'Unknown'}<span className="text-[10px] font-normal text-black/35">{call.mode === 'human' ? <Phone className="inline h-3 w-3" /> : <Bot className="inline h-3 w-3" />}</span></span><span className="mt-1 block text-xs text-black/38">{new Date(call.startedAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</span></span></div><div className="hidden md:block"><p className="text-xs text-black/38">Price movement</p><p className="mt-1 text-sm font-medium">{money(call.currentPrice)} <span className="px-1 text-black/25">→</span> {money(call.finalPrice)}</p></div><div className="text-right"><p className="text-xs text-black/38">{inProgress ? 'Status' : 'Saved / month'}</p><p className={`mt-1 text-sm font-semibold ${saved > 0 ? 'text-[#624799]' : inProgress ? 'text-amber-600' : 'text-black/45'}`}>{inProgress ? 'In progress' : saved > 0 ? money(saved) : 'No savings'}</p></div><ArrowRight className="hidden h-4 w-4 text-black/25 md:block" /></button> }
+function EmptyState() { return <div className="rounded-2xl border border-[#E5E5E5] bg-white px-6 py-20 text-center"><BarChart3 className="mx-auto mb-4 h-6 w-6 text-[#B291E6]" /><h2 className="text-xl font-semibold tracking-[-0.04em]">Your record starts here.</h2><p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-black/42">Run the local demo to see the transcript, offer movement, and verified savings appear here.</p><Link to="/new" className="interactive-cta mt-6 inline-flex items-center gap-2 rounded-full bg-black px-4 py-2.5 text-sm font-semibold text-white">Start a negotiation <ArrowRight className="h-4 w-4" /></Link></div> }

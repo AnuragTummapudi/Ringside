@@ -1,19 +1,10 @@
 import { ArrowRight } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import LogoIcon from './LogoIcon'
 
-const NAV_COLS = [
-  {
-    heading: 'Product',
-    links: ['How it works', 'Use cases', 'Pricing', 'Changelog'],
-  },
-  {
-    heading: 'Company',
-    links: ['About', 'Blog', 'Careers', 'Press'],
-  },
-  {
-    heading: 'Legal',
-    links: ['Privacy', 'Terms', 'Security'],
-  },
+const FOOTER_LINKS = [
+  { label: 'How it works', to: '/how-to-use' },
+  { label: 'Use cases', to: '/use-cases' },
 ]
 
 export default function FooterSection({ onCta }: { onCta?: () => void }) {
@@ -48,8 +39,8 @@ export default function FooterSection({ onCta }: { onCta?: () => void }) {
         <div className="footer-scene-image absolute inset-0" aria-hidden="true" />
         <div className="footer-content relative z-10 max-w-[88rem] mx-auto">
 
-          {/* Top row: brand + nav cols */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-12 mb-16">
+          {/* Top row: brand + current product navigation */}
+          <div className="flex flex-col justify-between gap-12 md:flex-row md:items-start mb-16">
             {/* Brand */}
             <div>
               <div className="flex items-center gap-2 mb-4">
@@ -58,43 +49,30 @@ export default function FooterSection({ onCta }: { onCta?: () => void }) {
                   className="text-xl font-medium text-black"
                   style={{ letterSpacing: '-0.03em' }}
                 >
-                  Ringside
+                  RINGSIDE
                 </span>
               </div>
               <p className="text-black/75 text-sm leading-relaxed max-w-[200px]">
-                The AI that fights for you on the phone.
+                Stop overpaying for your bills.<br />AI that calls. Negotiates. Saves.
               </p>
             </div>
 
-            {/* Nav columns */}
-            {NAV_COLS.map((col) => (
-              <div key={col.heading}>
-                <p className="text-black text-xs font-medium tracking-[.12em] uppercase mb-5">
-                  {col.heading}
-                </p>
-                <ul className="flex flex-col gap-3">
-                  {col.links.map((link) => (
-                    <li key={link}>
-                      <a
-                        href="#"
-                        className="text-black/75 text-sm hover:text-black transition-colors duration-200"
-                      >
-                        {link}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
+            <div className="md:pr-24">
+              <p className="text-black text-xs font-medium tracking-[.12em] uppercase mb-5">Explore</p>
+              <ul className="flex flex-col gap-3">
+                {FOOTER_LINKS.map((link) => (
+                  <li key={link.to}>
+                    <Link to={link.to} className="text-black/75 text-sm hover:text-black transition-colors duration-200">{link.label}</Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
 
           {/* Bottom bar */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pt-8">
+          <div className="border-t border-black/10 pt-8">
             <p className="text-black/70 text-sm">
               &copy; 2026 Ringside. All rights reserved.
-            </p>
-            <p className="text-black/70 text-xs">
-              Built at Push to Prod &mdash; Anthropic &times; Elevation Capital, Bengaluru
             </p>
           </div>
 

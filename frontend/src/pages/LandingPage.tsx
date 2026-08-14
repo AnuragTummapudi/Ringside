@@ -15,7 +15,7 @@ export default function LandingPage() {
   return (
     <div className="flex flex-col bg-[#F5F5F5]">
       <div className="h-screen flex flex-col overflow-hidden relative">
-        <Navbar onCta={() => navigate('/new')} />
+        <Navbar onCta={() => navigate('/login?returnTo=/new')} />
         <HeroSection onCta={() => navigate('/new')} />
       </div>
       <StatsSection />

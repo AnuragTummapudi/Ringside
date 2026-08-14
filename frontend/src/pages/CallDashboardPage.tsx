@@ -1,507 +1,68 @@
-import { useEffect, useRef, useState } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
-import { ArrowRight, Bot, Phone } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import { ArrowLeft, Bot, ChevronRight, CircleStop, Phone, ShieldCheck, Sparkles } from 'lucide-react'
 import LogoIcon from '../components/LogoIcon'
 import { API_BASE } from '../api'
 
-interface TurnEvent {
-  callId: string
-  turn: number
-  speaker: 'ringside' | 'rep'
-  text: string
-  action: string
-  currentOffer: number
-}
+interface Turn { speaker: string; text: string; action: string; currentOffer?: number; turn?: number }
+interface Report { outcome: string; startingPrice: number; finalPrice: number | null; targetPrice: number; monthlySavings: number; annualSavings: number; turns: number; strategy: string[]; objections: string[]; verification?: { status: string; confidence: number }; summary?: string }
+interface CallState { callId: string; config: { company: string; currentPrice: number; targetPrice: number; mode: string }; status: string; startedAt: string; resolved: boolean; finalPrice: number | null; resolutionReason: string | null; conversation: Turn[]; report?: Report | null }
 
-interface CallState {
-  callId: string
-  config: {
-    company: string
-    currentPrice: number
-    targetPrice: number
-    mode: string
-  }
-  resolved: boolean
-  finalPrice: number | null
-  resolutionReason: string | null
-  conversation: Array<{ speaker: string; text: string; action: string; currentOffer?: number }>
-}
-
-interface ResolvedInfo {
-  finalPrice: number
-  savings: number
-  savingsAnnual: number
-  resolutionReason?: string
-}
-
-type CallStatus = 'Preparing' | 'Connecting' | 'Ringing' | 'Live' | 'Complete' | 'Error'
-
-// ── Smooth number counter ─────────────────────────────────────────────────────
-function useAnimatedNumber(target: number | null) {
-  const [display, setDisplay] = useState<number | null>(null)
-  const animRef = useRef<number | null>(null)
-
-  useEffect(() => {
-    if (target === null) return
-    if (display === null) { setDisplay(target!); return }
-    if (animRef.current) cancelAnimationFrame(animRef.current)
-
-    const from = display
-    const dur  = 900
-    const t0   = performance.now()
-
-    function step(now: number) {
-      const p  = Math.min((now - t0) / dur, 1)
-      const e  = 1 - Math.pow(1 - p, 3)
-      const v  = Math.round(from + (target! - from) * e)
-      setDisplay(v)
-      if (p < 1) animRef.current = requestAnimationFrame(step)
-      else setDisplay(target!)
-    }
-    animRef.current = requestAnimationFrame(step)
-    return () => { if (animRef.current) cancelAnimationFrame(animRef.current) }
-  }, [target])
-
-  return display
-}
-
-function fmtDuration(secs: number): string {
-  const m = Math.floor(secs / 60)
-  const s = secs % 60
-  return m > 0 ? `${m}m ${s}s` : `${s}s`
-}
+function money(value: number | null | undefined) { return value == null ? '—' : `₹${value.toLocaleString('en-IN')}` }
 
 export default function CallDashboardPage() {
   const { id: callId } = useParams<{ id: string }>()
-  const navigate = useNavigate()
+  const [state, setState] = useState<CallState | null>(null)
+  const [turns, setTurns] = useState<Turn[]>([])
+  const [speaker, setSpeaker] = useState<string | null>(null)
+  const [status, setStatus] = useState('Preparing')
+  const [report, setReport] = useState<Report | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [offer, setOffer] = useState<number | null>(null)
+  const feedRef = useRef<HTMLDivElement>(null)
 
-  const [callState, setCallState] = useState<CallState | null>(null)
-  const [turns, setTurns]         = useState<TurnEvent[]>([])
-  const [speaker, setSpeaker]     = useState<'ringside' | 'rep' | null>(null)
-  const [status, setStatus]       = useState<CallStatus>('Preparing')
-  const [resolved, setResolved]   = useState<ResolvedInfo | null>(null)
-  const [errorMsg, setErrorMsg]   = useState<string | null>(null)
-  const [rawOffer, setRawOffer]   = useState<number | null>(null)
-  const [callDuration, setCallDuration] = useState<number | null>(null)
-
-  const displayOffer    = useAnimatedNumber(rawOffer)
-  const feedRef         = useRef<HTMLDivElement>(null)
-  const callAnsweredAt  = useRef<number | null>(null)
-
-  // Load initial state (handles page reload mid-call or after completion)
   useEffect(() => {
     if (!callId) return
-    fetch(`${API_BASE}/api/state/${callId}`)
-      .then((r) => r.json())
-      .then((s: CallState) => {
-        setCallState(s)
-        setRawOffer(s.config.currentPrice)
-
-        if (s.resolved && s.finalPrice != null) {
-          setRawOffer(s.finalPrice)
-          const savings = s.config.currentPrice - s.finalPrice
-          setResolved({
-            finalPrice: s.finalPrice,
-            savings,
-            savingsAnnual: savings * 12,
-            resolutionReason: s.resolutionReason ?? undefined,
-          })
-          setStatus('Complete')
-        }
-
-        // Replay conversation — server now enriches each turn with currentOffer
-        if (s.conversation.length) {
-          const replayTurns: TurnEvent[] = s.conversation.map((t, i) => ({
-            callId: s.callId,
-            turn: i,
-            speaker: t.speaker as 'ringside' | 'rep',
-            text: t.text,
-            action: t.action,
-            currentOffer: t.currentOffer ?? s.config.currentPrice,
-          }))
-          setTurns(replayTurns)
-          // Set offer to the last known offer in the conversation
-          const lastOffer = replayTurns[replayTurns.length - 1]?.currentOffer
-          if (lastOffer != null) setRawOffer(lastOffer)
-        }
-      })
-      .catch(() => {})
+    fetch(`${API_BASE}/api/state/${callId}`, { credentials: 'include' }).then(async (response) => { const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Call not found'); return data as CallState }).then((data) => {
+      setState(data); setStatus(data.status === 'resolved' ? 'Complete' : data.status || 'Preparing'); setTurns(data.conversation || []); setReport(data.report || null)
+      const last = data.conversation?.[data.conversation.length - 1]; setOffer(last?.currentOffer || data.finalPrice || data.config.currentPrice)
+    }).catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'Call not found'))
   }, [callId])
 
-  // SSE — real-time events from backend
   useEffect(() => {
     if (!callId) return
-    const es = new EventSource(`${API_BASE}/api/events`)
+    const events = new EventSource(`${API_BASE}/api/events?${new URLSearchParams({ callId }).toString()}`, { withCredentials: true })
+    const parse = (event: MessageEvent) => JSON.parse(event.data)
+    const onPreparing = (event: MessageEvent) => { if (parse(event).callId === callId) setStatus('Preparing') }
+    const onAnswered = (event: MessageEvent) => { if (parse(event).callId === callId) setStatus('Listening') }
+    const onTurn = (event: MessageEvent) => { const data = parse(event) as Turn & { callId: string }; if (data.callId !== callId) return; setStatus(data.speaker === 'ringside' ? 'Negotiating' : 'Listening'); setSpeaker(data.speaker); setOffer(data.currentOffer ?? null); setTurns((current) => current.some((turn) => turn.turn === data.turn && turn.speaker === data.speaker) ? current : [...current, data]); window.setTimeout(() => feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: 'smooth' }), 30) }
+    const onResolved = (event: MessageEvent) => { const data = parse(event); if (data.callId !== callId) return; setStatus('Complete'); setSpeaker(null); setOffer(data.finalPrice); if (data.report) setReport(data.report) }
+    const onError = (event: MessageEvent) => { const data = parse(event); if (data.callId === callId) { setStatus('Error'); setError(data.error || 'The call ended unexpectedly') } }
+    events.addEventListener('call_preparing', onPreparing); events.addEventListener('call_answered', onAnswered); events.addEventListener('turn_playing', onTurn); events.addEventListener('turn_text', onTurn); events.addEventListener('call_resolved', onResolved); events.addEventListener('call_error', onError)
+    return () => { events.close() }
+  }, [callId])
 
-    es.addEventListener('call_preparing', (e) => {
-      const d = JSON.parse(e.data)
-      if (d.callId !== callId) return
-      setStatus('Connecting')
-    })
+  const currentPrice = state?.config.currentPrice || report?.startingPrice || 0
+  const targetPrice = state?.config.targetPrice || report?.targetPrice || 0
+  const latestOffer = offer ?? currentPrice
+  const saved = latestOffer > 0 ? Math.max(0, currentPrice - latestOffer) : 0
+  const strength = useMemo(() => Math.min(98, Math.max(28, Math.round(48 + (state?.config.mode === 'agent' ? 12 : 4) + (saved > 0 ? 18 : 0) + (targetPrice > 0 && latestOffer <= targetPrice * 1.1 ? 16 : 0)))), [latestOffer, saved, state?.config.mode, targetPrice])
 
-    es.addEventListener('call_placed', (e) => {
-      const d = JSON.parse(e.data)
-      if (d.callId !== callId) return
-      setStatus('Ringing')
-    })
+  if (error && !state) return <main className="min-h-screen bg-[#F5F5F5] px-6 py-12"><Link to="/new" className="inline-flex items-center gap-2 text-sm text-black/55"><ArrowLeft className="h-4 w-4" /> New negotiation</Link><div className="mx-auto mt-20 max-w-lg rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">{error}</div></main>
 
-    es.addEventListener('call_answered', (e) => {
-      const d = JSON.parse(e.data)
-      if (d.callId !== callId) return
-      setStatus('Live')
-      callAnsweredAt.current = Date.now()
-    })
-
-    es.addEventListener('turn_playing', (e) => {
-      const d: TurnEvent = JSON.parse(e.data)
-      if (d.callId !== callId) return
-      setSpeaker(d.speaker)
-      setRawOffer(d.currentOffer)
-      setTurns((prev) => {
-        if (prev.some((t) => t.turn === d.turn && t.speaker === d.speaker)) return prev
-        return [...prev, d]
-      })
-    })
-
-    es.addEventListener('call_resolved', (e) => {
-      const d: ResolvedInfo & { callId: string } = JSON.parse(e.data)
-      if (d.callId !== callId) return
-      setResolved(d)
-      setRawOffer(d.finalPrice)
-      setStatus('Complete')
-      setSpeaker(null)
-      if (callAnsweredAt.current) {
-        setCallDuration(Math.round((Date.now() - callAnsweredAt.current) / 1000))
-      }
-    })
-
-    es.addEventListener('call_error', (e) => {
-      const d = JSON.parse(e.data)
-      if (d.callId !== callId) return
-      setErrorMsg(d.error)
-      setStatus('Error')
-    })
-
-    es.addEventListener('call_ended', (e) => {
-      const d = JSON.parse(e.data)
-      if (d.callId !== callId) return
-      if (callAnsweredAt.current && callDuration === null) {
-        setCallDuration(Math.round((Date.now() - callAnsweredAt.current) / 1000))
-      }
-      // If call ended without a resolved event (no deal / hung up)
-      setStatus((prev) => {
-        if (prev !== 'Complete') {
-          setErrorMsg((msg) => msg ?? 'Call ended without reaching an agreement.')
-          return 'Complete'
-        }
-        return prev
-      })
-    })
-
-    return () => es.close()
-  }, [callId, callDuration])
-
-  // Auto-scroll transcript
-  useEffect(() => {
-    if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight
-  }, [turns])
-
-  const config       = callState?.config
-  const initialPrice = config?.currentPrice ?? 0
-  const savings      = displayOffer != null ? initialPrice - displayOffer : null
-  const isLive       = status === 'Live'
-
-  const offerColor =
-    displayOffer != null && displayOffer <= (config?.targetPrice ?? 0) * 1.06
-      ? 'text-green-600'
-      : displayOffer != null && displayOffer < initialPrice
-      ? 'text-amber-600'
-      : 'text-black'
-
-  return (
-    <div className="h-screen bg-[#F5F5F5] flex flex-col overflow-hidden">
-
-      {/* Top navbar */}
-      <div className="flex-shrink-0 bg-white border-b border-[#E5E5E5] px-6 h-14 flex items-center justify-between">
-        <Link to="/" className="flex items-center gap-2 text-black">
-          <LogoIcon className="w-5 h-5" />
-          <span className="text-base font-medium" style={{ letterSpacing: '-0.03em' }}>Ringside</span>
-        </Link>
-        <Link to="/history" className="text-xs font-medium text-black/40 hover:text-black transition-colors duration-200 tracking-[.08em] uppercase">
-          History
-        </Link>
+  return <main className="min-h-screen bg-[#F5F5F5] text-black">
+    <header className="border-b border-[#E5E5E5] bg-white"><div className="ringside-page-container flex h-[72px] items-center justify-between"><Link to="/" className="flex items-center gap-2"><LogoIcon className="h-7 w-7" /><span className="text-xl font-semibold tracking-[-0.04em]">Ringside</span></Link><div className="flex items-center gap-4 text-sm"><span className={`inline-flex items-center gap-2 ${status === 'Complete' ? 'text-[#624799]' : status === 'Error' ? 'text-red-600' : 'text-black/55'}`}><span className={`h-2 w-2 rounded-full ${status === 'Complete' ? 'bg-[#B291E6]' : status === 'Error' ? 'bg-red-500' : 'animate-pulse bg-black/45'}`} />{status}</span><Link to="/history" className="text-black/45 transition hover:text-black">History</Link></div></div></header>
+    <div className="ringside-page-container py-6 md:py-8"><div className="mb-6 flex items-center justify-between"><div><Link to="/new" className="mb-3 inline-flex items-center gap-2 text-xs font-medium text-black/45 transition hover:text-black"><ArrowLeft className="h-3.5 w-3.5" /> New negotiation</Link><h1 className="text-3xl font-semibold tracking-[-0.05em] md:text-4xl">{state?.config.company || 'Preparing your call'}</h1><p className="mt-2 text-sm text-black/45">{state?.config.mode === 'human' ? 'Real call' : 'Local demo'} · live negotiation console</p></div>{status === 'Complete' && <Link to={`/negotiation/${callId}`} className="hidden items-center gap-2 border border-black/15 bg-white px-4 py-2 text-sm font-medium transition hover:border-black/40 md:inline-flex">Open full report <ChevronRight className="h-4 w-4" /></Link>}</div>
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(250px,.55fr)_minmax(250px,.55fr)]">
+        <section className="flex min-h-[640px] flex-col rounded-2xl border border-[#E5E5E5] bg-white"><div className="flex items-center justify-between border-b border-[#E5E5E5] px-5 py-4"><div><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/40">Live transcript</p><p className="mt-1 text-xs text-black/35">{turns.length} turns · {speaker ? `${speaker === 'ringside' ? 'Ringside' : 'Representative'} speaking` : 'Waiting for signal'}</p></div><span className="flex items-center gap-2 text-xs text-black/45">{state?.config.mode === 'human' ? <Phone className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />} {state?.config.mode === 'human' ? 'Phone' : 'AI vs AI'}</span></div><div ref={feedRef} className="flex-1 space-y-5 overflow-y-auto p-5 md:p-7">{turns.length === 0 && <LoadingTranscript status={status} />}{turns.map((turn, index) => <TranscriptTurn key={`${turn.speaker}-${turn.turn ?? index}`} turn={turn} company={state?.config.company || 'Representative'} />)}{status !== 'Complete' && status !== 'Error' && turns.length > 0 && <div className="flex items-center gap-2 py-2 text-xs text-black/35"><span className="flex gap-1"><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-black/35" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-black/35 [animation-delay:120ms]" /><i className="h-1.5 w-1.5 animate-bounce rounded-full bg-black/35 [animation-delay:240ms]" /></span>Analyzing the response…</div>}</div></section>
+        <section className="rounded-2xl border border-[#E5E5E5] bg-white p-5 md:p-6"><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/40">Negotiation</p><h2 className="mt-2 text-lg font-semibold tracking-[-0.03em]">The numbers</h2><div className="mt-8 space-y-6"><PriceBlock label="Current bill" value={currentPrice} muted /><div className="border-l border-[#B291E6] pl-4"><PriceBlock label="Current offer" value={latestOffer} highlight /><p className="mt-2 text-xs text-[#624799]">{saved ? `${money(saved)} lower per month` : 'Waiting for the first offer'}</p></div><PriceBlock label="Target" value={targetPrice} muted /></div><div className="mt-10 border-t border-[#E5E5E5] pt-5"><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-black/40">Offer movement</p><div className="mt-4 space-y-3">{turns.filter((turn) => turn.speaker === 'rep' && turn.currentOffer && turn.currentOffer < currentPrice).map((turn, index) => <div key={`${turn.turn}-${index}`} className="flex items-center justify-between text-sm"><span className="text-black/45">{turn.action === 'fold' ? 'Retention offer' : 'Rep offer'}</span><span className="font-semibold">{money(turn.currentOffer)}</span></div>)}</div></div></section>
+        <section className="rounded-2xl border border-black/10 bg-[#2B2644] p-5 text-white md:p-6"><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/42">Intelligence</p><h2 className="mt-2 text-lg font-semibold tracking-[-0.03em]">Agent status</h2><div className="mt-7 flex items-center gap-3 border-y border-white/12 py-4"><span className={`flex h-9 w-9 items-center justify-center border border-white/15 ${speaker ? 'text-[#B291E6]' : 'text-white/45'}`}><Sparkles className="h-4 w-4" /></span><div><p className="text-sm font-medium">{status === 'Complete' ? 'Verifying the deal' : status}</p><p className="mt-1 text-xs text-white/45">{speaker === 'rep' ? 'Listening for an offer or objection' : speaker === 'ringside' ? 'Making the next move' : 'State machine is ready'}</p></div></div><div className="mt-7"><div className="flex items-end justify-between"><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/42">Negotiation strength</p><span className="text-2xl font-semibold tracking-[-0.05em]">{strength}</span></div><div className="mt-3 h-1.5 rounded-full bg-white/12"><div className="h-full rounded-full bg-[#B291E6] transition-all duration-700" style={{ width: `${strength}%` }} /></div><p className="mt-3 text-xs leading-5 text-white/48">{saved > 0 ? 'The offer is moving in your direction.' : 'Add verified leverage to improve the position.'}</p></div><div className="mt-8 border-t border-white/12 pt-5"><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/42">Strategy</p><p className="mt-3 text-sm leading-6 text-white/70">{turns.some((turn) => turn.action === 'lever_escalate') ? 'Escalation and retention review' : turns.some((turn) => turn.action === 'lever_loyalty_competitor') ? 'Loyalty and comparable pricing' : 'Opening the conversation'}</p></div><div className="mt-8 flex items-start gap-2 border-t border-white/12 pt-5 text-xs leading-5 text-white/42"><ShieldCheck className="h-4 w-4 shrink-0 text-[#B291E6]" />Private reasoning stays private. This panel shows only decision-relevant status.</div></section>
       </div>
-
-      {/* Call bar */}
-      <div className="flex-shrink-0 bg-white border-b border-[#E5E5E5] px-8 h-14 flex items-center gap-4">
-        <div className="flex items-center gap-3">
-          <Avatar label="R" active={speaker === 'ringside'} variant="black" />
-          <div>
-            <div className="text-sm font-medium text-black leading-none mb-0.5">Ringside</div>
-            <div className={`text-[10px] font-medium uppercase tracking-[.08em] transition-colors duration-300 ${
-              speaker === 'ringside' ? 'text-black' : 'text-black/30'
-            }`}>
-              {speaker === 'ringside' ? 'Speaking' : speaker === 'rep' ? 'Listening' : resolved ? 'Done' : status}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex-1 flex items-center gap-3 justify-center">
-          <div className={`h-px flex-1 max-w-16 transition-colors duration-300 ${isLive ? 'bg-green-500' : 'bg-[#E5E5E5]'}`} />
-          <span className={`text-[10px] font-medium uppercase tracking-[.1em] px-3 py-1 rounded-full border transition-all duration-300 ${
-            isLive ? 'text-green-600 border-green-200 bg-green-50' :
-            status === 'Complete' ? 'text-green-600 border-green-200 bg-green-50' :
-            'text-black/30 border-[#E5E5E5]'
-          }`}>
-            {status === 'Live' ? '● Live' : status === 'Complete' ? '✓ Done' : status}
-          </span>
-          <div className={`h-px flex-1 max-w-16 transition-colors duration-300 ${isLive ? 'bg-green-500' : 'bg-[#E5E5E5]'}`} />
-        </div>
-
-        <div className="flex items-center gap-3 flex-row-reverse">
-          <Avatar label={config?.mode === 'human' ? 'REP' : 'SR'} active={speaker === 'rep'} variant="red" />
-          <div className="text-right">
-            <div className="text-sm font-medium text-black leading-none mb-0.5">
-              {config?.company || 'Company Rep'}
-            </div>
-            <div className={`text-[10px] font-medium uppercase tracking-[.08em] transition-colors duration-300 flex items-center gap-1 justify-end ${
-              config?.mode === 'human' ? 'text-blue-500' : 'text-black/30'
-            }`}>
-              {config?.mode === 'human'
-                ? <><Phone className="w-3 h-3" />Real person</>
-                : <><Bot className="w-3 h-3" />AI agent</>}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Body */}
-      <div className="flex-1 flex overflow-hidden">
-
-        {/* Left: offer panel */}
-        <div className="w-72 flex-shrink-0 bg-white border-r border-[#E5E5E5] flex flex-col p-7 overflow-y-auto">
-          <p className="text-[10px] font-medium text-black/30 uppercase tracking-[.14em] mb-3">Current Offer</p>
-
-          <div className="mb-1">
-            <span className={`text-6xl font-medium leading-none transition-colors duration-500 ${offerColor}`} style={{ letterSpacing: '-0.04em' }}>
-              {displayOffer != null ? `₹${displayOffer.toLocaleString('en-IN')}` : '—'}
-            </span>
-            <span className="text-base text-black/30 ml-1">/mo</span>
-          </div>
-
-          <p className={`text-xs mb-8 transition-colors duration-300 ${savings && savings > 0 ? 'text-green-600' : 'text-black/30'}`}>
-            {savings && savings > 0
-              ? `Down ₹${savings.toLocaleString('en-IN')} from ₹${initialPrice.toLocaleString('en-IN')}`
-              : isLive ? 'Negotiation in progress' : status === 'Preparing' ? 'Preparing call…' : 'Awaiting connection'}
-          </p>
-
-          {/* Live savings block */}
-          {savings != null && savings > 0 && !resolved && (
-            <div className="border-t border-[#E5E5E5] pt-5 mb-5">
-              <p className="text-[10px] font-medium text-black/30 uppercase tracking-[.14em] mb-3">Projected Savings</p>
-              <div className="flex justify-between items-baseline py-2 border-b border-[#E5E5E5]">
-                <span className="text-xs text-black/50">Per month</span>
-                <span className="text-base font-medium text-green-600" style={{ letterSpacing: '-0.02em' }}>₹{savings.toLocaleString('en-IN')}</span>
-              </div>
-              <div className="flex justify-between items-baseline py-2">
-                <span className="text-xs text-black/50">Per year</span>
-                <span className="text-base font-medium text-green-600" style={{ letterSpacing: '-0.02em' }}>₹{(savings * 12).toLocaleString('en-IN')}</span>
-              </div>
-            </div>
-          )}
-
-          {/* ── Resolution summary card ── */}
-          {resolved && status === 'Complete' && (
-            <ResolutionCard
-              resolved={resolved}
-              initialPrice={initialPrice}
-              callDuration={callDuration}
-            />
-          )}
-
-          {/* Error */}
-          {errorMsg && (
-            <div className="bg-red-50 border border-red-200 rounded-xl p-4 mt-4">
-              <p className="text-[10px] font-medium uppercase tracking-[.1em] text-red-500 mb-1">
-                {resolved ? 'Note' : 'Error'}
-              </p>
-              <p className="text-xs text-red-600 leading-relaxed">{errorMsg}</p>
-            </div>
-          )}
-
-          {/* New call CTA */}
-          {(status === 'Complete' || status === 'Error') && (
-            <button
-              onClick={() => navigate('/new')}
-              className="mt-6 inline-flex items-center gap-2 bg-black text-white text-xs font-medium pl-4 pr-1.5 py-1.5 rounded-full hover:bg-gray-900 transition-colors duration-200"
-            >
-              New negotiation
-              <span className="bg-white rounded-full p-1"><ArrowRight className="w-3 h-3 text-black" /></span>
-            </button>
-          )}
-        </div>
-
-        {/* Right: transcript */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-shrink-0 bg-white border-b border-[#E5E5E5] px-7 py-4 flex items-center justify-between">
-            <p className="text-[10px] font-medium text-black/30 uppercase tracking-[.14em]">Live Transcript</p>
-            <p className="text-xs text-black/30">{turns.length} turns</p>
-          </div>
-
-          <div ref={feedRef} className="flex-1 overflow-y-auto px-7 py-5 flex flex-col gap-4">
-            {turns.length === 0 && status !== 'Error' && (
-              <div className="flex items-center gap-3 opacity-40 py-2">
-                <WaitingDots />
-                <span className="text-xs text-black/40 font-medium">
-                  {status === 'Preparing' || status === 'Connecting'
-                    ? 'Generating negotiation…'
-                    : 'Waiting for call to connect…'}
-                </span>
-              </div>
-            )}
-
-            {turns.map((t) => {
-              const isR = t.speaker === 'ringside'
-              return (
-                <div key={`${t.speaker}-${t.turn}`} className="flex gap-3 items-start">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-semibold flex-shrink-0 mt-0.5 ${
-                    isR ? 'bg-black/8 text-black border border-black/10' : 'bg-red-50 text-red-600 border border-red-200'
-                  }`}>
-                    {isR ? 'R' : 'SR'}
-                  </div>
-                  <div className="bg-white border border-[#E5E5E5] rounded-xl px-4 py-3 flex-1">
-                    <p className={`text-[10px] font-medium uppercase tracking-[.1em] mb-1.5 ${isR ? 'text-black/60' : 'text-red-500'}`}>
-                      {isR ? 'Ringside' : config?.company || 'Rep'}
-                    </p>
-                    <p className="text-sm text-black leading-relaxed">{t.text}</p>
-                    {/* Show offer badge when the rep makes a pricing move */}
-                    {!isR && (t.action === 'first_offer' || t.action === 'fold') && (
-                      <span className={`inline-flex mt-2 text-[10px] font-medium px-2 py-0.5 rounded-full border ${
-                        t.action === 'fold'
-                          ? 'bg-green-50 text-green-600 border-green-200'
-                          : 'bg-amber-50 text-amber-600 border-amber-200'
-                      }`}>
-                        {t.action === 'fold' ? 'Final offer' : 'Offer'}: ₹{t.currentOffer?.toLocaleString('en-IN')}/mo
-                      </span>
-                    )}
-                    {/* Ringside accept badge */}
-                    {isR && t.action === 'accept' && (
-                      <span className="inline-flex mt-2 text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-600 border border-green-200">
-                        ✓ Accepted at ₹{t.currentOffer?.toLocaleString('en-IN')}/mo
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-
-            {/* Waiting indicator while live */}
-            {isLive && turns.length > 0 && !resolved && (
-              <div className="flex items-center gap-3 opacity-40 py-1">
-                <WaitingDots />
-                <span className="text-xs text-black/40 font-medium">Waiting for response…</span>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+      {report && <section className="mt-4 rounded-2xl border border-[#E5E5E5] bg-white p-5 md:p-7"><div className="flex flex-col justify-between gap-5 md:flex-row md:items-end"><div><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#624799]">Negotiation report</p><h2 className="mt-2 text-2xl font-semibold tracking-[-0.05em]">{report.outcome === 'won' ? 'A better deal is ready.' : 'The call is complete.'}</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-black/55">{report.summary}</p></div><div className="flex items-center gap-3"><div><p className="text-[10px] uppercase tracking-[0.12em] text-black/40">Monthly saving</p><p className="mt-1 text-2xl font-semibold tracking-[-0.05em]">{money(report.monthlySavings)}</p></div><Link to={`/negotiation/${callId}`} className="inline-flex items-center gap-2 rounded-full bg-black px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#2a2a2a]">View report <ChevronRight className="h-4 w-4" /></Link></div></div></section>}
     </div>
-  )
+  </main>
 }
 
-// ── Resolution Summary Card ───────────────────────────────────────────────────
-
-function ResolutionCard({
-  resolved,
-  initialPrice,
-  callDuration,
-}: {
-  resolved: ResolvedInfo
-  initialPrice: number
-  callDuration: number | null
-}) {
-  const won       = resolved.resolutionReason === 'accepted'
-  const bestOffer = resolved.resolutionReason === 'budget_exhausted'
-  const noDeal    = !won && !bestOffer
-
-  const outcomeLabel = won ? 'Negotiation won' : bestOffer ? 'Best offer reached' : 'No deal'
-  const outcomeColor = won
-    ? 'bg-green-50 border-green-200 text-green-700'
-    : bestOffer
-    ? 'bg-amber-50 border-amber-200 text-amber-700'
-    : 'bg-[#F5F5F5] border-[#E5E5E5] text-black/50'
-
-  const savingsMo  = resolved.savings
-  const savingsYr  = resolved.savingsAnnual
-
-  return (
-    <div className={`rounded-xl border p-4 ${outcomeColor}`}>
-      {/* Outcome + duration */}
-      <div className="flex items-start justify-between mb-3">
-        <p className="text-[10px] font-semibold uppercase tracking-[.1em]">
-          {won ? '✓ ' : bestOffer ? '↓ ' : '✕ '}{outcomeLabel}
-        </p>
-        {callDuration != null && callDuration > 0 && (
-          <span className="text-[10px] font-medium opacity-60">{fmtDuration(callDuration)}</span>
-        )}
-      </div>
-
-      {/* Price journey */}
-      <div className="flex items-baseline gap-2 mb-3">
-        <span className="text-sm line-through opacity-40">₹{initialPrice.toLocaleString('en-IN')}</span>
-        <span className="text-xl font-semibold" style={{ letterSpacing: '-0.03em' }}>
-          ₹{resolved.finalPrice.toLocaleString('en-IN')}
-        </span>
-        <span className="text-xs opacity-50">/mo</span>
-      </div>
-
-      {/* Savings */}
-      {savingsMo > 0 && !noDeal && (
-        <div className="flex flex-col gap-1 border-t border-current/10 pt-3">
-          <div className="flex justify-between text-xs">
-            <span className="opacity-60">Monthly saving</span>
-            <span className="font-medium">₹{savingsMo.toLocaleString('en-IN')}</span>
-          </div>
-          <div className="flex justify-between text-xs">
-            <span className="opacity-60">Yearly saving</span>
-            <span className="font-medium">₹{savingsYr.toLocaleString('en-IN')}</span>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Sub-components ─────────────────────────────────────────────────────────────
-
-function Avatar({ label, active, variant }: { label: string; active: boolean; variant: 'black' | 'red' }) {
-  const base = variant === 'black'
-    ? 'bg-black/8 border-black/12 text-black'
-    : 'bg-red-50 border-red-200 text-red-600'
-  const ring = active
-    ? variant === 'black'
-      ? 'ring-2 ring-black/20 ring-offset-1'
-      : 'ring-2 ring-red-300 ring-offset-1'
-    : ''
-
-  return (
-    <div className={`w-8 h-8 rounded-lg border flex items-center justify-center text-[10px] font-semibold flex-shrink-0 transition-all duration-300 ${base} ${ring}`}>
-      {label}
-    </div>
-  )
-}
-
-function WaitingDots() {
-  return (
-    <div className="flex gap-1">
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className="w-1 h-1 rounded-full bg-black/30"
-          style={{ animation: `wd 1.2s ease-in-out ${i * 0.2}s infinite` }}
-        />
-      ))}
-      <style>{`@keyframes wd { 0%,80%,100%{opacity:.3;transform:scale(.8)} 40%{opacity:1;transform:scale(1.2)} }`}</style>
-    </div>
-  )
-}
+function PriceBlock({ label, value, muted, highlight }: { label: string; value: number; muted?: boolean; highlight?: boolean }) { return <div><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-black/40">{label}</p><p className={`mt-2 text-4xl font-semibold tracking-[-0.07em] ${muted ? 'text-black/55' : highlight ? 'text-[#624799]' : 'text-black'}`}>{money(value)}<span className="ml-1 text-sm font-normal tracking-normal text-black/30">/mo</span></p></div> }
+function TranscriptTurn({ turn, company }: { turn: Turn; company: string }) { const ringside = turn.speaker === 'ringside'; return <div className={`flex gap-3 ${ringside ? '' : 'flex-row-reverse'}`}><div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[10px] font-semibold ${ringside ? 'bg-black text-white' : 'border border-[#E5E5E5] bg-[#F5F2FB] text-black/55'}`}>{ringside ? 'R' : 'REP'}</div><div className={`max-w-[88%] ${ringside ? '' : 'text-right'}`}><p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-black/38">{ringside ? 'Ringside' : company}</p><p className={`text-sm leading-6 ${ringside ? 'text-black' : 'text-black/65'}`}>{turn.text}</p>{turn.currentOffer && turn.speaker === 'rep' && turn.currentOffer > 0 && <span className="mt-2 inline-block text-xs font-semibold text-[#624799]">Offer: {money(turn.currentOffer)}/mo</span>}</div></div> }
+function LoadingTranscript({ status }: { status: string }) { return <div className="flex h-full min-h-[260px] flex-col items-center justify-center text-center"><CircleStop className="mb-4 h-6 w-6 animate-pulse text-black/25" /><p className="text-sm font-medium">{status === 'Preparing' ? 'Building the negotiation' : 'Waiting for the call to connect'}</p><p className="mt-2 text-xs text-black/38">The live transcript will appear here.</p></div> }

@@ -1,312 +1,227 @@
-import { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
-import { ArrowRight, ArrowLeft, Bot, Phone } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { ArrowLeft, ArrowRight, Bot, Check, FileText, Phone, Sparkles, UploadCloud, X } from 'lucide-react'
 import LogoIcon from '../components/LogoIcon'
 import { API_BASE } from '../api'
+import { BillDraft, NegotiationFormDraft, clearNegotiationDraft, getNegotiationDraft, saveNegotiationDraft } from '../negotiationDraft'
 
-interface FormState {
-  company: string
-  dialCode: string
-  localPhone: string
-  currentPrice: string
-  targetPrice: string
-  notes: string
-  mode: 'agent' | 'human'
+type BillData = BillDraft
+type FormState = NegotiationFormDraft
+
+interface AuthUser {
+  id: string
+  email: string
+  name: string
+  avatarUrl: string | null
 }
 
-const COUNTRIES = [
-  { code: 'IN', flag: '🇮🇳', name: 'India',         dialCode: '+91',  minLen: 10, maxLen: 10 },
-  { code: 'US', flag: '🇺🇸', name: 'United States', dialCode: '+1',   minLen: 10, maxLen: 10 },
-  { code: 'GB', flag: '🇬🇧', name: 'United Kingdom',dialCode: '+44',  minLen: 10, maxLen: 10 },
-  { code: 'AE', flag: '🇦🇪', name: 'UAE',           dialCode: '+971', minLen: 9,  maxLen: 9  },
-  { code: 'SG', flag: '🇸🇬', name: 'Singapore',     dialCode: '+65',  minLen: 8,  maxLen: 8  },
-]
+const inputClass = 'w-full rounded-xl border border-[#E5E5E5] bg-white px-4 py-3 text-sm text-black outline-none transition focus:border-black/50 focus:ring-2 focus:ring-[rgba(98,71,153,.12)]'
 
 export default function NewNegotiationPage() {
   const navigate = useNavigate()
-  const [form, setForm] = useState<FormState>({
-    company: '',
-    dialCode: '+91',
-    localPhone: '',
-    currentPrice: '',
-    targetPrice: '',
-    notes: '',
-    mode: 'agent',
-  })
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [form, setForm] = useState<FormState>({ company: '', currentPrice: '', targetPrice: '', notes: '', tenure: '', competitor: '', phone: '', mode: 'agent' })
+  const [bill, setBill] = useState<BillData | null>(null)
+  const [uploadState, setUploadState] = useState<'idle' | 'processing' | 'done' | 'error'>('idle')
+  const [suggesting, setSuggesting] = useState(false)
+  const [suggestion, setSuggestion] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [user, setUser] = useState<AuthUser | null>(null)
+  const [authChecked, setAuthChecked] = useState(false)
+  const [draftRestored, setDraftRestored] = useState(false)
 
-  function set(key: keyof FormState, value: string) {
-    setForm((f) => ({ ...f, [key]: value }))
+  useEffect(() => {
+    const draft = getNegotiationDraft()
+    if (draft) {
+      setForm(draft.form)
+      setBill(draft.bill)
+      setUploadState(draft.uploadState === 'processing' ? 'idle' : draft.uploadState)
+      setSuggestion(draft.suggestion)
+      setDraftRestored(true)
+    }
+    fetch(`${API_BASE}/api/auth/me`, { credentials: 'include' }).then((response) => response.ok ? response.json() : { user: null }).then((me) => {
+      setUser(me.user || null)
+    }).catch(() => setUser(null)).finally(() => setAuthChecked(true))
+  }, [])
+
+  function continueToLogin() {
+    saveNegotiationDraft({ form, bill, uploadState, suggestion })
+    navigate('/login?returnTo=/new')
+  }
+
+  async function signOut() {
+    await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST', credentials: 'include' })
+    setUser(null)
+  }
+
+  function update(key: keyof FormState, value: string) {
+    setForm((current) => ({ ...current, [key]: value }))
     setError(null)
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-
-    const cur = parseInt(form.currentPrice, 10)
-    const tar = parseInt(form.targetPrice, 10)
-    if (!form.company.trim())   return setError('Company name is required.')
-    if (isNaN(cur) || cur <= 0) return setError('Enter a valid current price.')
-    if (isNaN(tar) || tar <= 0) return setError('Enter a valid target price.')
-    if (tar >= cur)             return setError('Target price must be lower than current price.')
-
-    // Phone validation for human mode
-    let phone: string | undefined
-    if (form.mode === 'human') {
-      const digits = form.localPhone.replace(/\D/g, '')
-      const country = COUNTRIES.find((c) => c.dialCode === form.dialCode) ?? COUNTRIES[0]
-      if (!digits) return setError('Phone number is required for real-call mode.')
-      if (digits.length < country.minLen || digits.length > country.maxLen) {
-        return setError(`Phone number must be ${country.minLen} digits for ${country.name}.`)
-      }
-      phone = `${form.dialCode}${digits}`
-    }
-
-    setLoading(true)
+  async function uploadBill(file: File) {
+    setUploadState('processing')
     setError(null)
-
+    const data = new FormData()
+    data.append('bill', file)
     try {
-      const resp = await fetch(`${API_BASE}/api/call/start`, {
+      const response = await fetch(`${API_BASE}/api/bills/upload`, { method: 'POST', body: data, credentials: 'include' })
+      const payload = await response.json()
+      if (!response.ok && !payload.bill) throw new Error(payload.error || payload.message || 'Could not analyze this bill')
+      const extracted = payload.bill as BillData
+      setBill(extracted)
+      setForm((current) => ({
+        ...current,
+        company: extracted.provider || current.company,
+        currentPrice: extracted.currentMonthlyPrice ? String(extracted.currentMonthlyPrice) : current.currentPrice,
+        tenure: extracted.customerTenure || current.tenure,
+        notes: [current.notes, extracted.planName, extracted.speed, extracted.contractStatus].filter(Boolean).join(', '),
+      }))
+      setUploadState(payload.success ? 'done' : 'error')
+      if (!payload.success) setError(payload.message || 'We could not read the document. You can continue with manual entry.')
+    } catch (uploadError) {
+      setUploadState('error')
+      setError(uploadError instanceof Error ? uploadError.message : 'Bill upload failed')
+    }
+  }
+
+  async function suggestTarget() {
+    const current = Number(form.currentPrice)
+    if (!current || current < 2) return setError('Enter your current bill first.')
+    setSuggesting(true)
+    setError(null)
+    try {
+      const response = await fetch(`${API_BASE}/api/research`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ company: form.company, notes: `${form.notes} ${form.competitor}`, bill, targetPrice: Math.round(current * 0.7) }),
+      })
+      const payload = await response.json()
+      const suggested = payload.research?.sources?.length ? Math.round(current * 0.72 / 10) * 10 : Math.round(current * 0.7 / 10) * 10
+      setSuggestion(suggested)
+      setForm((currentForm) => ({ ...currentForm, targetPrice: String(suggested) }))
+    } catch {
+      const suggested = Math.round(current * 0.7 / 10) * 10
+      setSuggestion(suggested)
+      setForm((currentForm) => ({ ...currentForm, targetPrice: String(suggested) }))
+    } finally {
+      setSuggesting(false)
+    }
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    if (!user) {
+      if (!authChecked) return setError('Checking your sign-in status. Please try again in a moment.')
+      continueToLogin()
+      return
+    }
+    const currentPrice = Number(form.currentPrice)
+    const targetPrice = Number(form.targetPrice)
+    if (!form.company.trim()) return setError('Add the company or service name.')
+    if (!currentPrice || currentPrice < 1) return setError('Add your current monthly bill.')
+    if (!targetPrice || targetPrice >= currentPrice) return setError('Target price must be lower than your current bill.')
+    if (form.mode === 'human' && !/^\+[1-9]\d{7,14}$/.test(form.phone.replace(/[^\d+]/g, ''))) return setError('Use an international phone number, for example +919876543210.')
+    setLoading(true)
+    setError(null)
+    try {
+      const response = await fetch(`${API_BASE}/api/call/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
-          company:      form.company.trim(),
-          phone,
-          currentPrice: cur,
-          targetPrice:  tar,
-          notes:        form.notes.trim(),
-          mode:         form.mode,
+          company: form.company.trim(), currentPrice, targetPrice,
+          notes: [form.notes, form.tenure && `Customer tenure: ${form.tenure}`, form.competitor && `Comparable offer: ${form.competitor}`].filter(Boolean).join('. '),
+          bill, mode: form.mode, phone: form.phone.replace(/[^\d+]/g, ''), transport: form.mode === 'human' ? 'twilio' : 'demo',
         }),
       })
-      const data = await resp.json()
-      if (!resp.ok) throw new Error(data.error || 'Failed to start call')
-      navigate(`/call/${data.callId}`)
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
+      const payload = await response.json()
+      if (!response.ok) throw new Error(payload.error || 'Could not start negotiation')
+      clearNegotiationDraft()
+      navigate(`/call/${payload.callId}`)
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Could not start negotiation')
       setLoading(false)
     }
   }
 
+  const current = Number(form.currentPrice) || 0
+  const target = Number(form.targetPrice) || 0
+  const savings = current > target && target > 0 ? current - target : 0
+  const strength = Math.min(98, Math.max(22, Math.round(48 + (form.tenure ? 15 : 0) + (form.competitor ? 20 : 0) + (bill ? 8 : 0) + (target && current ? 10 : 0))))
+
   return (
-    <div className="min-h-screen bg-[#F5F5F5] flex flex-col">
-      {/* Minimal nav */}
-      <nav className="px-8 py-5 flex items-center justify-between border-b border-[#E5E5E5] bg-white">
-        <Link to="/" className="flex items-center gap-2 text-black">
-          <LogoIcon className="w-6 h-6" />
-          <span className="text-lg font-medium" style={{ letterSpacing: '-0.03em' }}>Ringside</span>
-        </Link>
-        <Link to="/history" className="text-sm font-medium text-black/50 hover:text-black transition-colors duration-200">
-          History
-        </Link>
-      </nav>
+    <main className="min-h-screen bg-[#F5F5F5] text-black">
+      <header className="border-b border-black/10 bg-white">
+        <div className="ringside-page-container flex h-[72px] items-center justify-between">
+          <Link to="/" className="flex items-center gap-2" aria-label="Ringside home"><LogoIcon className="h-7 w-7" /><span className="text-xl font-semibold tracking-[-0.04em]">Ringside</span></Link>
+          <div className="flex items-center gap-4">
+            {user ? <><span className="hidden text-sm text-black/50 sm:inline">{user.name}</span><button type="button" onClick={() => void signOut()} className="text-sm font-medium text-black/55 transition hover:text-black">Sign out</button></> : <button type="button" onClick={continueToLogin} className="text-sm font-medium text-black/55 transition hover:text-black">Sign in</button>}
+            <Link to="/history" className="text-sm font-medium text-black/55 transition hover:text-black">History</Link>
+          </div>
+        </div>
+      </header>
 
-      {/* Main */}
-      <div className="flex-1 flex items-start justify-center px-6 py-16">
-        <div className="w-full max-w-2xl">
+      <div className="ringside-page-container py-7 md:pb-14 md:pt-9">
+        <Link to="/" className="mb-6 inline-flex items-center gap-2 text-sm text-black/45 transition hover:text-black"><ArrowLeft className="h-4 w-4" /> Back</Link>
+        <div className="mb-8 max-w-2xl md:mb-9">
+          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-black/42">New negotiation</p>
+          <h1 className="text-4xl font-semibold leading-[1.03] tracking-[-0.055em] md:text-6xl">Tell Ringside what to fight for.</h1>
+          <p className="mt-4 max-w-xl text-base leading-7 text-black/55">Upload the bill or enter it manually. Ringside will turn the details into a clear negotiating position.</p>
+        </div>
 
-          {/* Back */}
-          <Link to="/" className="inline-flex items-center gap-2 text-black/40 hover:text-black text-sm font-medium transition-colors duration-200 mb-10">
-            <ArrowLeft className="w-4 h-4" />
-            Back
-          </Link>
+        {draftRestored && <div className="mb-6 flex items-center gap-2 border border-[#E5E5E5] bg-white px-4 py-3 text-sm text-black/58"><Check className="h-4 w-4 shrink-0 text-[#624799]" />Your saved negotiation details are ready.</div>}
 
-          {/* Heading */}
-          <h1
-            className="text-5xl font-medium text-black mb-3"
-            style={{ letterSpacing: '-0.04em' }}
-          >
-            New negotiation
-          </h1>
-          <p className="text-black/50 text-base mb-12">
-            Tell Ringside what to fight for. It handles the rest.
-          </p>
+        <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1.55fr)_minmax(360px,1fr)]">
+          <form onSubmit={submit} className="rounded-2xl border border-[#E5E5E5] bg-white p-5 md:p-8">
+            <div className="mb-8 flex items-center justify-between border-b border-black/10 pb-5"><div><h2 className="text-lg font-semibold tracking-[-0.03em]">Negotiation setup</h2><p className="mt-1 text-sm text-black/45">The essentials are enough to start.</p></div><span className="text-xs text-black/35">01 / 01</span></div>
 
-          <form onSubmit={handleSubmit} className="flex flex-col gap-6">
-
-            {/* Company */}
-            <Field label="Company / service name" required>
-              <input
-                type="text"
-                placeholder="e.g. Airtel, Netflix, Jio"
-                value={form.company}
-                onChange={(e) => set('company', e.target.value)}
-                className="w-full bg-white border border-[#E5E5E5] rounded-xl px-4 py-3 text-black text-base placeholder-black/30 focus:outline-none focus:border-black/40 transition-colors"
-              />
-            </Field>
-
-            {/* Prices */}
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="Current monthly bill (₹)" required>
-                <input
-                  type="number"
-                  placeholder="1499"
-                  min={1}
-                  value={form.currentPrice}
-                  onChange={(e) => set('currentPrice', e.target.value)}
-                  className="w-full bg-white border border-[#E5E5E5] rounded-xl px-4 py-3 text-black text-base placeholder-black/30 focus:outline-none focus:border-black/40 transition-colors"
-                />
-              </Field>
-              <Field label="Target price (₹)" required>
-                <input
-                  type="number"
-                  placeholder="999"
-                  min={1}
-                  value={form.targetPrice}
-                  onChange={(e) => set('targetPrice', e.target.value)}
-                  className="w-full bg-white border border-[#E5E5E5] rounded-xl px-4 py-3 text-black text-base placeholder-black/30 focus:outline-none focus:border-black/40 transition-colors"
-                />
-              </Field>
+            <div className="mb-8">
+              <div className="mb-3 flex items-center justify-between"><label className="text-sm font-semibold">Upload your bill</label><span className="text-xs text-black/38">PDF, PNG, JPG · 8 MB</span></div>
+              <button type="button" onClick={() => inputRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) void uploadBill(file) }} className="group flex min-h-[148px] w-full flex-col items-center justify-center rounded-2xl border border-dashed border-black/20 bg-[#F7F4FB] px-5 text-center transition hover:border-black/50 hover:bg-[#F5F2FB]">
+                <UploadCloud className="mb-3 h-6 w-6 text-black/45 transition group-hover:-translate-y-0.5 group-hover:text-black" />
+                <span className="text-sm font-medium">{uploadState === 'processing' ? 'Analyzing your bill…' : uploadState === 'done' ? 'Bill analyzed. Replace file' : 'Drop a bill here or browse'}</span>
+                <span className="mt-1 text-xs text-black/40">We extract only the fields needed for negotiation.</span>
+              </button>
+              <input ref={inputRef} type="file" accept=".pdf,.png,.jpg,.jpeg,.txt,.md" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadBill(file) }} />
+              {bill && <div className="mt-3 flex items-center justify-between rounded-xl border border-[#E5E5E5] bg-[#F7F4FB] px-3 py-2.5 text-xs"><span className="flex items-center gap-2"><FileText className="h-4 w-4 text-black/45" />{bill.sourceFilename || 'Uploaded bill'}<Check className="h-4 w-4 text-[#624799]" /></span><button type="button" onClick={() => { setBill(null); setUploadState('idle') }} aria-label="Remove bill"><X className="h-4 w-4 text-black/35" /></button></div>}
             </div>
 
-            {/* Notes */}
-            <Field label="Context / leverage (optional)">
-              <textarea
-                placeholder="e.g. Customer for 3 years, competitor offers ₹950 for same speed, threatening to cancel"
-                rows={3}
-                value={form.notes}
-                onChange={(e) => set('notes', e.target.value)}
-                className="w-full bg-white border border-[#E5E5E5] rounded-xl px-4 py-3 text-black text-base placeholder-black/30 focus:outline-none focus:border-black/40 transition-colors resize-none"
-              />
-            </Field>
-
-            {/* Mode toggle */}
-            <div>
-              <label className="block text-xs font-medium text-black/50 uppercase tracking-[.12em] mb-3">
-                Who answers the call?
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                <ModeCard
-                  selected={form.mode === 'agent'}
-                  onClick={() => set('mode', 'agent')}
-                  icon={<Bot className="w-5 h-5" />}
-                  title="AI Agent"
-                  desc="Ringside vs. a scripted AI rep — instant, repeatable demo"
-                />
-                <ModeCard
-                  selected={form.mode === 'human'}
-                  onClick={() => set('mode', 'human')}
-                  icon={<Phone className="w-5 h-5" />}
-                  title="Real call"
-                  desc="Ringside negotiates live with whoever actually picks up"
-                />
-              </div>
+            <div className="grid gap-5 md:grid-cols-2">
+              <Field label="Company or service" required><input className={inputClass} value={form.company} onChange={(event) => update('company', event.target.value)} placeholder="Airtel, Netflix, Jio" /></Field>
+              <Field label="Customer tenure"><input className={inputClass} value={form.tenure} onChange={(event) => update('tenure', event.target.value)} placeholder="3 years" /></Field>
+              <Field label="Current monthly bill" required><MoneyInput value={form.currentPrice} onChange={(value) => update('currentPrice', value)} /></Field>
+              <Field label="Target price" required><div className="flex gap-2"><MoneyInput value={form.targetPrice} onChange={(value) => update('targetPrice', value)} /><button type="button" title="Suggest a target" onClick={() => void suggestTarget()} className="interactive-cta flex shrink-0 items-center justify-center rounded-full border border-black bg-black px-3 text-white transition hover:bg-[#303030] disabled:opacity-50" disabled={suggesting}>{suggesting ? <span className="text-xs">…</span> : <Sparkles className="h-4 w-4" />}</button></div>{suggestion && <p className="mt-2 text-xs text-[#624799]">Suggested from your current bill: ₹{suggestion.toLocaleString('en-IN')}</p>}</Field>
+            </div>
+            <div className="mt-5 grid gap-5 md:grid-cols-2">
+              <Field label="Comparable offer"><MoneyInput value={form.competitor} onChange={(value) => update('competitor', value)} placeholder="Optional" /></Field>
+              <Field label="Context"><input className={inputClass} value={form.notes} onChange={(event) => update('notes', event.target.value)} placeholder="Plan, promotion, contract details" /></Field>
             </div>
 
-            {/* Phone (required for human mode) */}
-            {form.mode === 'human' && (
-              <Field label="Phone number to call" required>
-                <PhoneField
-                  dialCode={form.dialCode}
-                  localPhone={form.localPhone}
-                  onDialCode={(v) => set('dialCode', v)}
-                  onLocalPhone={(v) => set('localPhone', v)}
-                />
-              </Field>
-            )}
+            <div className="mt-8 border-t border-[#E5E5E5] pt-6"><p className="mb-3 text-sm font-semibold">How should Ringside connect?</p><div className="grid gap-3 md:grid-cols-2"><ModeButton selected={form.mode === 'agent'} onClick={() => update('mode', 'agent')} icon={<Bot className="h-4 w-4" />} title="Demo mode" text="Instant AI vs AI negotiation" /><ModeButton selected={form.mode === 'human'} onClick={() => update('mode', 'human')} icon={<Phone className="h-4 w-4" />} title="Real call" text="Use Twilio to call a person" /></div>{form.mode === 'human' && <div className="mt-4"><Field label="International phone number" required><input className={inputClass} value={form.phone} onChange={(event) => update('phone', event.target.value)} placeholder="+919876543210" /></Field></div>}</div>
 
-            {/* Error */}
-            {error && (
-              <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-red-700 text-sm">
-                {error}
-              </div>
-            )}
-
-            {/* Submit */}
-            <button
-              type="submit"
-              disabled={loading}
-              className="inline-flex items-center gap-3 bg-black text-white text-base font-medium pl-8 pr-2 py-2 rounded-full hover:bg-gray-900 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed self-start mt-2"
-            >
-              {loading ? 'Starting call…' : 'Start negotiation'}
-              <span className="bg-white rounded-full p-2">
-                <ArrowRight className="w-5 h-5 text-black" />
-              </span>
-            </button>
+            {error && <div role="alert" className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+            <button type="submit" disabled={loading} className="interactive-cta mt-8 inline-flex items-center gap-3 rounded-full bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#2a2a2a] active:translate-y-px disabled:cursor-wait disabled:opacity-50">{loading ? 'Preparing…' : 'Start negotiation'}<ArrowRight className="h-4 w-4" /></button>
           </form>
+
+          <aside className="self-start rounded-2xl border border-black/10 bg-[#2B2644] p-6 text-white lg:sticky lg:top-6 md:p-7">
+            <div className="mb-8 flex items-center justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/45">Ringside preview</p><h2 className="mt-2 text-xl font-semibold tracking-[-0.04em]">Your negotiating position</h2></div><Shield /></div>
+            <div className="border-y border-white/12 py-5"><PreviewRow label="Company" value={form.company || 'Your provider'} /><PreviewRow label="Current bill" value={current ? `₹${current.toLocaleString('en-IN')}/mo` : 'Add a bill'} /><PreviewRow label="Target" value={target ? `₹${target.toLocaleString('en-IN')}/mo` : 'Set a target'} /></div>
+            <div className="grid grid-cols-2 gap-3 border-b border-white/12 py-5"><Metric label="Potential saving" value={savings ? `₹${savings.toLocaleString('en-IN')}` : '—'} /><Metric label="Strength" value={`${strength}/100`} /></div>
+            <div className="py-5"><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/42">Opening strategy</p><p className="mt-3 text-sm leading-6 text-white/70">{form.competitor ? 'Lead with a comparable offer, then use loyalty and retention pressure.' : 'Start with loyalty and a clear request, then ask for a retention review.'}</p></div>
+            <div className="flex items-start gap-2 border-t border-white/12 pt-5 text-xs leading-5 text-white/45"><Shield className="mt-0.5 h-4 w-4 shrink-0 text-[#B291E6]" />Your notes stay inside the negotiation context and are filtered before reaching the voice agent.</div>
+          </aside>
         </div>
       </div>
-    </div>
+    </main>
   )
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
-
-function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
-  return (
-    <div>
-      <label className="block text-xs font-medium text-black/50 uppercase tracking-[.12em] mb-2">
-        {label}{required && <span className="text-black/30 ml-1">*</span>}
-      </label>
-      {children}
-    </div>
-  )
-}
-
-function PhoneField({
-  dialCode, localPhone, onDialCode, onLocalPhone,
-}: {
-  dialCode: string
-  localPhone: string
-  onDialCode: (v: string) => void
-  onLocalPhone: (v: string) => void
-}) {
-  const selected = COUNTRIES.find((c) => c.dialCode === dialCode) ?? COUNTRIES[0]
-
-  return (
-    <div className="flex rounded-xl border border-[#E5E5E5] bg-white overflow-hidden focus-within:border-black/40 transition-colors">
-      {/* Country select */}
-      <div className="relative flex-shrink-0 border-r border-[#E5E5E5]">
-        <select
-          value={dialCode}
-          onChange={(e) => onDialCode(e.target.value)}
-          className="appearance-none bg-transparent pl-3 pr-7 py-3 text-base text-black focus:outline-none cursor-pointer"
-          style={{ minWidth: '90px' }}
-        >
-          {COUNTRIES.map((c) => (
-            <option key={c.code} value={c.dialCode}>
-              {c.flag} {c.dialCode}
-            </option>
-          ))}
-        </select>
-        {/* Chevron */}
-        <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-black/30 text-xs">▾</div>
-      </div>
-
-      {/* Local number input */}
-      <input
-        type="tel"
-        placeholder={selected.minLen === 10 ? '9876543210' : `${selected.minLen}-digit number`}
-        value={localPhone}
-        onChange={(e) => onLocalPhone(e.target.value)}
-        className="flex-1 bg-transparent px-4 py-3 text-black text-base placeholder-black/30 focus:outline-none"
-      />
-    </div>
-  )
-}
-
-function ModeCard({
-  selected, onClick, icon, title, desc,
-}: {
-  selected: boolean
-  onClick: () => void
-  icon: React.ReactNode
-  title: string
-  desc: string
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`text-left rounded-2xl border p-4 transition-all duration-200 ${
-        selected
-          ? 'bg-black text-white border-black'
-          : 'bg-white text-black border-[#E5E5E5] hover:border-black/30'
-      }`}
-    >
-      <div className={`mb-2 ${selected ? 'text-white' : 'text-black/60'}`}>{icon}</div>
-      <div className="font-medium text-sm mb-1">{title}</div>
-      <div className={`text-xs leading-relaxed ${selected ? 'text-white/60' : 'text-black/40'}`}>{desc}</div>
-    </button>
-  )
-}
+function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) { return <label className="block text-sm font-medium text-black/72"><span className="mb-2 block">{label}{required && <span className="ml-1 text-black/35">*</span>}</span>{children}</label> }
+function MoneyInput({ value, onChange, placeholder = '₹ 1,499' }: { value: string; onChange: (value: string) => void; placeholder?: string }) { return <div className="relative flex-1"><span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm text-black/35">₹</span><input type="number" min="1" className={`${inputClass} pl-8`} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder.replace('₹ ', '')} /></div> }
+function ModeButton({ selected, onClick, icon, title, text }: { selected: boolean; onClick: () => void; icon: React.ReactNode; title: string; text: string }) { return <button type="button" onClick={onClick} className={`flex items-start gap-3 rounded-xl border p-4 text-left transition ${selected ? 'border-[#2B2644] bg-[#2B2644] text-white' : 'border-[#E5E5E5] bg-white text-black hover:border-black/35'}`}><span className={`mt-0.5 ${selected ? 'text-white' : 'text-black/45'}`}>{icon}</span><span><span className="block text-sm font-semibold">{title}</span><span className={`mt-1 block text-xs ${selected ? 'text-white/58' : 'text-black/42'}`}>{text}</span></span></button> }
+function PreviewRow({ label, value }: { label: string; value: string }) { return <div className="flex items-center justify-between gap-4 py-2 text-sm"><span className="text-white/45">{label}</span><span className="text-right font-medium">{value}</span></div> }
+function Metric({ label, value }: { label: string; value: string }) { return <div><p className="text-[10px] uppercase tracking-[0.12em] text-white/42">{label}</p><p className="mt-2 text-xl font-semibold tracking-[-0.04em]">{value}</p></div> }
+function Shield({ className = '' }: { className?: string }) { return <span className={`flex h-8 w-8 items-center justify-center border border-white/15 text-[#B291E6] ${className}`}><Check className="h-4 w-4" /></span> }
