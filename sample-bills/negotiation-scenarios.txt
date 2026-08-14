@@ -1,0 +1,9 @@
+Scenario: strong leverage
+Use when the customer has long tenure, no contract, and a verified comparable offer.
+Recommended approach: loyalty first, then comparable pricing, then retention review.
+
+Scenario: best offer
+If the representative says the available rate is final, ask once for a retention review and record the offer without inventing a competitor or policy.
+
+Scenario: no deal
+If no lower price is offered, mark the result as no_deal or best_offer and do not claim savings.

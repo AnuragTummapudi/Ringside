@@ -9,16 +9,23 @@
     "build:ui": "cd frontend && npm run build",
     "dev:ui": "cd frontend && npm run dev",
     "build": "npm run build:ui && node server.js",
+    "test:guardrails": "node test-guardrails.js",
     "test:negotiate": "node test-negotiate.js",
     "test:tts": "node test-tts.js",
-    "preflight": "node preflight.js"
+    "preflight": "node preflight.js",
+    "db:migrate": "node migrate.js",
+    "rag:ingest": "node rag-ingest.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.3",
+    "@neondatabase/serverless": "^1.1.0",
     "axios": "^1.7.9",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "google-auth-library": "^11.0.2",
+    "multer": "^2.2.0",
     "twilio": "^5.4.0",
     "uuid": "^11.0.5"
   }

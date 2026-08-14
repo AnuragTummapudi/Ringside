@@ -6,6 +6,7 @@ const { spawn } = require('child_process');
 
 const MAYA_TTS_URL = 'https://tts.mayaresearch.ai/v1/tts';
 const AUDIO_DIR    = path.join(__dirname, 'audio');
+const TTS_TIMEOUT_MS = parseInt(process.env.TTS_TIMEOUT_MS || '8000', 10);
 
 // Maya /v1/tts returns raw PCM:
 //   16-bit signed little-endian, mono, 24 000 Hz, no file header.
@@ -67,7 +68,9 @@ async function generateAudio(text, speaker, turnNum, callId, action) {
             'Content-Type': 'application/json',
           },
           responseType: 'arraybuffer',
-          timeout: 12000,
+          timeout: Number.isInteger(TTS_TIMEOUT_MS) ? TTS_TIMEOUT_MS : 8000,
+          maxContentLength: 2 * 1024 * 1024,
+          maxBodyLength: 16 * 1024,
         }
       );
 
@@ -149,7 +152,9 @@ async function cacheLine(speaker, action, text) {
         'Content-Type': 'application/json',
       },
       responseType: 'arraybuffer',
-      timeout: 12000,
+      timeout: Number.isInteger(TTS_TIMEOUT_MS) ? TTS_TIMEOUT_MS : 8000,
+      maxContentLength: 2 * 1024 * 1024,
+      maxBodyLength: 16 * 1024,
     }
   );
 
@@ -160,4 +165,14 @@ async function cacheLine(speaker, action, text) {
   console.log(`[TTS] Cached (8kHz WAV): ${cacheFile}`);
 }
 
-module.exports = { generateAudio, generateFallbackCache, ensureAudioDir };
+async function cleanupAudioFiles(audioFiles) {
+  const entries = Array.isArray(audioFiles) ? audioFiles : [];
+  await Promise.allSettled(entries.map(async ({ file }) => {
+    if (!file || file.startsWith('cache_')) return;
+    const resolved = path.resolve(AUDIO_DIR, file);
+    if (!resolved.startsWith(AUDIO_DIR + path.sep)) return;
+    await fs.unlink(resolved).catch(() => {});
+  }));
+}
+
+module.exports = { generateAudio, generateFallbackCache, ensureAudioDir, cleanupAudioFiles };

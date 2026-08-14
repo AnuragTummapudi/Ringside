@@ -1,42 +1,87 @@
 require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
+const axios   = require('axios');
 const twilio  = require('twilio');
 const path    = require('path');
+const crypto  = require('crypto');
+const fs      = require('fs');
 const { v4: uuid } = require('uuid');
+const multer  = require('multer');
+const cookieParser = require('cookie-parser');
 
 const {
   DEFAULT_CONFIG,
   deriveConfig,
   createState,
-  buildFallbackLines,
-  getRingsideAction,
-  applyRingsideTurn,
-  applyRepTurn,
   runRingsideTurn,
-  runRepTurn,
   runNegotiation,
   extractOfferFromSpeech,
-  INITIAL_PRICE,
+  ingestHumanSpeech,
 } = require('./negotiate');
 
-const { generateAudio, generateFallbackCache, ensureAudioDir } = require('./tts');
+const policy = require('./policy');
+const { generateAudio, generateFallbackCache, ensureAudioDir, cleanupAudioFiles } = require('./tts');
+const persistence = require('./persistence');
+const { attachUser, requireUser, registerAuthRoutes, configured: googleAuthConfigured } = require('./auth');
+const { extractTextFromFile, extractBillData, sanitizeBillForClient } = require('./bill');
+const { buildResearchContext, ingestDocument, searchKnowledge } = require('./rag');
+const { buildReport, verifyFinalOffer } = require('./report');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+const isProduction = process.env.NODE_ENV === 'production';
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.set('trust proxy', true);
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    if (!isProduction && !allowedOrigins.length) return cb(null, true);
+    if (isProduction && !allowedOrigins.length && publicBaseUrl() === origin) return cb(null, true);
+    return cb(new Error('Origin not allowed by CORS'));
+  },
+  credentials: true,
+}));
+app.use(express.json({ limit: '128kb' }));
+app.use(express.urlencoded({ extended: true, limit: '128kb' }));
+app.use(cookieParser());
+// This deliberately remains unauthenticated so Twilio's public reachability can be checked before a call is placed.
+app.get('/healthz', (_req, res) => res.status(200).type('text/plain').send('ok'));
 app.use(express.static('public'));
-app.use('/audio', express.static(path.join(__dirname, 'audio')));
+app.use(attachUser);
+registerAuthRoutes(app);
+
+const uploadDir = path.join(__dirname, 'data', 'uploads');
+fs.mkdirSync(uploadDir, { recursive: true });
+const upload = multer({
+  dest: uploadDir,
+  limits: { fileSize: 8 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = new Set(['application/pdf', 'image/png', 'image/jpeg', 'text/plain', 'text/markdown', 'application/json']);
+    cb(null, allowed.has(file.mimetype) || /\.(pdf|png|jpe?g|txt|md|json)$/i.test(file.originalname));
+  },
+});
 
 // ── IN-MEMORY STATE ────────────────────────────────────────────────────────────
 const activeCalls  = {};   // callId → call object
 const callSidToId  = {};   // Twilio CallSid → callId
 
 // ── SSE ────────────────────────────────────────────────────────────────────────
-const sseClients = new Set();
+const sseClients = new Map();
 
 app.get('/api/events', (req, res) => {
+  const callId = String(req.query.callId || '');
+  const apiAuthorized = hasApiAccess(req);
+  const call = activeCalls[callId];
+
+  if (!apiAuthorized && (!req.user || !callId || !ownsCall(req, call))) {
+    return res.status(403).json({ error: 'Unauthorized event stream' });
+  }
+
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -45,19 +90,217 @@ app.get('/api/events', (req, res) => {
   });
   res.flushHeaders();
   const hb = setInterval(() => res.write(': heartbeat\n\n'), 15000);
-  sseClients.add(res);
+  sseClients.set(res, { callId, userId: req.user?.id || null, apiAuthorized });
   req.on('close', () => { clearInterval(hb); sseClients.delete(res); });
 });
 
 function emit(event, data) {
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const client of sseClients) client.write(msg);
+  for (const [client, scope] of sseClients) {
+    if (
+      scope.apiAuthorized ||
+      (data.callId && data.callId === scope.callId && activeCalls[data.callId]?.userId === scope.userId)
+    ) {
+      client.write(msg);
+    }
+  }
 }
 
 // ── HELPERS ────────────────────────────────────────────────────────────────────
+function makeToken() {
+  return crypto.randomBytes(24).toString('base64url');
+}
+
 function escapeXml(str) {
   return String(str).replace(/[<>&"]/g, (c) => ({ '<':'&lt;', '>':'&gt;', '&':'&amp;', '"':'&quot;' }[c]));
 }
+
+function publicBaseUrl() {
+  return String(process.env.NGROK_URL || '').replace(/\/+$/, '');
+}
+
+async function assertPublicWebhookReachable(baseUrl) {
+  try {
+    await axios.get(`${baseUrl}/healthz`, {
+      timeout: 5_000,
+      maxRedirects: 0,
+      validateStatus: (status) => status === 200,
+    });
+  } catch (error) {
+    const host = (() => {
+      try { return new URL(baseUrl).host; } catch { return 'the configured public URL'; }
+    })();
+    const detail = error.response
+      ? `returned HTTP ${error.response.status}`
+      : 'could not be reached';
+    throw new Error(`Twilio webhook at ${host} ${detail}. Start or update the public tunnel before calling.`);
+  }
+}
+
+function hasApiAccess(req) {
+  const configured = process.env.RINGSIDE_API_TOKEN;
+  if (!configured) return false;
+
+  const bearer = String(req.get('authorization') || '').replace(/^Bearer\s+/i, '');
+  const header = String(req.get('x-ringside-token') || '');
+  return bearer === configured || header === configured;
+}
+
+function ownsCall(req, call) {
+  return Boolean(call && req.user && call.userId && req.user.id === call.userId);
+}
+
+async function canAccessCall(req, callId) {
+  const call = activeCalls[callId];
+  const persisted = call || await persistence.getNegotiation(callId, req.user?.id);
+  return Boolean(persisted && (hasApiAccess(req) || ownsCall(req, persisted)));
+}
+
+function requireApiAccess(req, res, next) {
+  if (hasApiAccess(req)) return next();
+  return res.status(401).json({ error: 'Unauthorized' });
+}
+
+function validateStartBody(body = {}) {
+  const company = policy.truncate(body.company || DEFAULT_CONFIG.company, 80);
+  const notes = policy.truncate(body.notes || '', 240);
+  const mode = body.mode === 'human' ? 'human' : 'agent';
+  const currentPrice = parseInt(body.currentPrice, 10);
+  const targetPrice = parseInt(body.targetPrice, 10);
+  const maxTurns = body.maxTurns == null ? DEFAULT_CONFIG.maxTurns : parseInt(body.maxTurns, 10);
+  const phone = body.phone ? String(body.phone).replace(/[^\d+]/g, '') : null;
+
+  if (!company) return { error: 'Company name is required' };
+  if (!Number.isInteger(currentPrice) || currentPrice < 1 || currentPrice > 1_000_000) {
+    return { error: 'Current price must be between 1 and 1000000' };
+  }
+  if (!Number.isInteger(targetPrice) || targetPrice < 1 || targetPrice > 1_000_000) {
+    return { error: 'Target price must be between 1 and 1000000' };
+  }
+  if (targetPrice >= currentPrice) return { error: 'Target price must be less than current price' };
+  if (!Number.isInteger(maxTurns) || maxTurns < 4 || maxTurns > 12) {
+    return { error: 'Max turns must be between 4 and 12' };
+  }
+  if (phone && !/^\+[1-9]\d{7,14}$/.test(phone)) {
+    return { error: 'Phone number must be E.164 format, for example +14155552671' };
+  }
+  if (mode === 'human' && !phone) return { error: 'Phone number is required for human mode' };
+
+  const transport = mode === 'human' || body.transport === 'twilio' ? 'twilio' : 'demo';
+  return { config: deriveConfig({ company, currentPrice, targetPrice, notes, mode, maxTurns, phone, transport }) };
+}
+
+function productionOutboundAllowed(req) {
+  if (process.env.PUBLIC_OUTBOUND_CALLS_ENABLED === 'true') return true;
+  if (hasApiAccess(req)) return true;
+  return !isProduction;
+}
+
+function requireTwilioSignature(req, res, next) {
+  const required = isProduction || process.env.REQUIRE_TWILIO_SIGNATURES === 'true';
+  if (!required) return next();
+
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const signature = req.get('x-twilio-signature');
+  const base = publicBaseUrl();
+  if (!authToken || !signature || !base) {
+    return res.status(403).type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
+  }
+
+  const url = `${base}${req.originalUrl}`;
+  const valid = twilio.validateRequest(authToken, signature, url, req.body || {});
+  if (!valid) {
+    console.warn(`[SECURITY] Rejected Twilio request for ${req.originalUrl}: invalid signature`);
+    return res.status(403).type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
+  }
+  return next();
+}
+
+function verifyCallSid(req, call) {
+  const sid = req.body?.CallSid;
+  return !call.twilioCallSid || !sid || sid === call.twilioCallSid;
+}
+
+function callAudioUrl(call, file) {
+  if (!file) return null;
+  return `${publicBaseUrl()}/audio/${encodeURIComponent(file)}?token=${encodeURIComponent(call.audioToken)}`;
+}
+
+function enqueueCallWork(call, work) {
+  call.queue = (call.queue || Promise.resolve())
+    .catch(() => {})
+    .then(work);
+  return call.queue;
+}
+
+function finalizeCall(callId, status) {
+  const call = activeCalls[callId];
+  if (!call) return;
+  call.status = status || call.status || 'ended';
+  call.endedAt = call.endedAt || new Date().toISOString();
+  call.report = buildReport(call, call.research, call.bill);
+  void persistCall(call).catch((error) => console.error(`[PERSIST] ${callId}:`, error.message));
+  const retentionMs = parseInt(process.env.AUDIO_RETENTION_MS || String(15 * 60 * 1000), 10);
+  if (!call.audioCleanupScheduled) {
+    call.audioCleanupScheduled = true;
+    setTimeout(() => cleanupAudioFiles(call.audioFiles || []), Math.max(0, retentionMs)).unref?.();
+  }
+}
+
+async function persistCall(call) {
+  if (!call || !call.userId) return;
+  await persistence.upsertNegotiation({
+    callId: call.callId,
+    userId: call.userId,
+    config: {
+      company: call.config?.company,
+      currentPrice: call.config?.currentPrice,
+      targetPrice: call.config?.targetPrice,
+      mode: call.config?.mode,
+      transport: call.config?.transport || 'twilio',
+      notes: call.config?.notes,
+    },
+    startedAt: call.startedAt,
+    endedAt: call.endedAt,
+    status: call.status,
+    currentTurn: call.currentTurn,
+    negotiationState: call.negotiationState,
+    report: call.report || buildReport(call, call.research, call.bill),
+    research: call.research || { sources: [], provider: 'none', verified: false },
+    bill: call.bill ? sanitizeBillForClient(call.bill) : null,
+  });
+}
+
+function ttsConcurrency() {
+  const n = parseInt(process.env.TTS_CONCURRENCY || '3', 10);
+  return Number.isInteger(n) ? Math.min(4, Math.max(1, n)) : 3;
+}
+
+async function mapLimit(items, limit, iterator) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const i = nextIndex;
+      nextIndex += 1;
+      results[i] = await iterator(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+app.get('/audio/:file', (req, res) => {
+  const { file } = req.params;
+  if (!/^[A-Za-z0-9_.-]+$/.test(file) || file.includes('..')) return res.sendStatus(400);
+  const token = String(req.query.token || '');
+  const call = Object.values(activeCalls).find((c) =>
+    c.audioToken === token &&
+    (c.audioFiles || []).some((a) => a.file === file)
+  );
+  if (!call && !hasApiAccess(req)) return res.sendStatus(403);
+  return res.sendFile(path.join(__dirname, 'audio', file));
+});
 
 function offerAtTurn(conversation, upTo, config) {
   const c = deriveConfig(config);
@@ -91,164 +334,198 @@ function twimlPlay(audioUrl, nextUrl, speakerText) {
 }
 
 // ── START CALL ─────────────────────────────────────────────────────────────────
-app.post('/api/call/start', async (req, res) => {
-  const body = req.body || {};
-
-  // Build config from request body; fall back to defaults
-  const rawConfig = {
-    company:     body.company     || DEFAULT_CONFIG.company,
-    currentPrice: parseInt(body.currentPrice, 10) || DEFAULT_CONFIG.currentPrice,
-    targetPrice:  parseInt(body.targetPrice,  10) || DEFAULT_CONFIG.targetPrice,
-    notes:       body.notes       || '',
-    mode:        body.mode        || 'agent',
-    maxTurns:    parseInt(body.maxTurns, 10) || DEFAULT_CONFIG.maxTurns,
-    phone:       body.phone       || null,
-  };
-
-  const config = deriveConfig(rawConfig);
-
-  // Validation
-  if (config.targetPrice >= config.currentPrice) {
-    return res.status(400).json({ error: 'Target price must be less than current price' });
+async function startCall(req, res) {
+  if (!productionOutboundAllowed(req)) {
+    return res.status(403).json({
+      error: 'Outbound calling is disabled until RINGSIDE_API_TOKEN or PUBLIC_OUTBOUND_CALLS_ENABLED is configured',
+    });
   }
-  if (config.mode === 'human' && !config.phone) {
-    return res.status(400).json({ error: 'Phone number is required for human mode' });
+
+  const parsed = validateStartBody(req.body || {});
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const { config } = parsed;
+
+  const ngrok = publicBaseUrl();
+  const toNumber = config.mode === 'human' ? config.phone : (config.phone || process.env.TWILIO_REP_NUMBER);
+  if (config.transport === 'twilio') {
+    if (!ngrok) return res.status(500).json({ error: 'NGROK_URL not set' });
+    if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_RINGSIDE_NUMBER) {
+      return res.status(500).json({ error: 'Twilio environment variables are not fully configured' });
+    }
+    if (!toNumber) return res.status(500).json({ error: 'No phone number to call' });
+    try {
+      await assertPublicWebhookReachable(ngrok);
+    } catch (error) {
+      return res.status(503).json({ error: error.message });
+    }
   }
 
   const callId = uuid();
+  const audioToken = makeToken();
   console.log(`\n[CALL ${callId}] Starting — mode=${config.mode}, company=${config.company}`);
 
-  if (config.mode === 'human') {
-    return handleHumanCall(callId, config, res);
-  }
-  return handleAgentCall(callId, config, res);
-});
-
-// ── AGENT MODE ─────────────────────────────────────────────────────────────────
-async function handleAgentCall(callId, config, res) {
-  // 0. Validate prerequisites before any work
-  const ngrok    = process.env.NGROK_URL;
-  const toNumber = config.phone || process.env.TWILIO_REP_NUMBER;
-  if (!ngrok)    return res.status(500).json({ error: 'NGROK_URL not set — run ngrok and update .env' });
-  if (!toNumber) return res.status(500).json({ error: 'No phone number to call — set TWILIO_REP_NUMBER in .env or pass phone in request' });
-
-  emit('call_preparing', { callId, message: 'Generating negotiation script...' });
-
-  try {
-    // 1. Full text negotiation (sequential for context)
-    const negotiationState = await runNegotiation(config);
-    console.log(`[CALL ${callId}] Negotiation: ${negotiationState.turn_count} turns → ₹${negotiationState.final_price} (${negotiationState.resolution_reason})`);
-
-    // Emit text turns for dashboard preview
-    negotiationState.conversation.forEach((t, i) => {
-      emit('turn_text', {
-        callId, turn: i,
-        speaker: t.speaker, text: t.text, action: t.action,
-        currentOffer: offerAtTurn(negotiationState.conversation, i, config),
-      });
-    });
-
-    // 2. Generate all audio in parallel
-    emit('call_preparing', { callId, message: 'Generating voice audio...' });
-    const audioResults = await Promise.all(
-      negotiationState.conversation.map((t, i) =>
-        generateAudio(t.text, t.speaker, i, callId, t.action)
-      )
-    );
-
-    const audioFiles = negotiationState.conversation.map((t, i) => ({
-      turn: i, speaker: t.speaker, text: t.text, action: t.action,
-      file: audioResults[i],
-    }));
-
-    // 3. Store state
-    activeCalls[callId] = {
-      callId, config,
-      startedAt: new Date().toISOString(),
-      negotiationState,
-      audioFiles,
-      currentTurn: -1,
-      twilioCallSid: null,
-    };
-
-    // 4. Place Twilio call
-    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-
-    const call = await twilioClient.calls.create({
-      to: toNumber,
-      from: process.env.TWILIO_RINGSIDE_NUMBER,
-      url: `${ngrok}/twiml/start?callId=${callId}`,
-      method: 'POST',
-      statusCallback: `${ngrok}/api/call-status?callId=${callId}`,
-      statusCallbackMethod: 'POST',
-      timeout: 30,
-    });
-
-    activeCalls[callId].twilioCallSid = call.sid;
-    callSidToId[call.sid] = callId;
-    emit('call_placed', { callId, callSid: call.sid });
-    console.log(`[CALL ${callId}] Twilio call placed: ${call.sid}`);
-
-    res.json({ success: true, callId, callSid: call.sid, mode: 'agent' });
-  } catch (err) {
-    console.error(`[CALL ${callId}] Error:`, err.message);
-    emit('call_error', { callId, error: err.message });
-    res.status(500).json({ error: err.message });
-  }
-}
-
-// ── HUMAN MODE ─────────────────────────────────────────────────────────────────
-async function handleHumanCall(callId, config, res) {
-  const ngrok = process.env.NGROK_URL;
-  if (!ngrok) return res.status(500).json({ error: 'NGROK_URL not set' });
-
-  // No pre-generation — negotiation happens live on the call
   activeCalls[callId] = {
-    callId, config,
+    callId, config, audioToken,
+    userId: req.user.id,
     startedAt: new Date().toISOString(),
     negotiationState: createState(config),
     audioFiles: [],
     currentTurn: -1,
     twilioCallSid: null,
+    status: 'preparing',
+    queue: Promise.resolve(),
+    bill: req.body.bill || null,
+    research: req.body.research || buildResearchContext({ company: config.company, notes: config.notes, targetPrice: config.targetPrice }),
   };
+  try {
+    await persistCall(activeCalls[callId]);
+  } catch (error) {
+    delete activeCalls[callId];
+    return res.status(503).json({ error: 'Could not save this negotiation. Please try again.' });
+  }
 
+  res.status(202).json({ success: true, callId, mode: config.mode, status: 'preparing' });
+
+  if (config.mode === 'human') {
+    handleHumanCall(callId, config).catch((err) => handleAsyncCallError(callId, err));
+    return;
+  }
+  if (config.transport === 'demo') {
+    handleDemoCall(callId, config).catch((err) => handleAsyncCallError(callId, err));
+    return;
+  }
+  handleAgentCall(callId, config).catch((err) => handleAsyncCallError(callId, err));
+}
+
+app.post('/api/call/start', requireUser, startCall);
+
+function handleAsyncCallError(callId, err) {
+  console.error(`[CALL ${callId}] Error:`, err.message);
+  const call = activeCalls[callId];
+  if (call) call.status = 'error';
+  emit('call_error', { callId, error: err.message });
+  finalizeCall(callId, 'error');
+}
+
+// ── AGENT MODE ─────────────────────────────────────────────────────────────────
+async function handleAgentCall(callId, config) {
+  const callState = activeCalls[callId];
+  const ngrok = publicBaseUrl();
+  const toNumber = config.phone || process.env.TWILIO_REP_NUMBER;
+  emit('call_preparing', { callId, message: 'Generating negotiation script...' });
+
+  // Full text negotiation is sequential for context, but turns are emitted as soon as they are ready.
+  const negotiationState = await runNegotiation(config, {
+    onTurn({ speaker, action, text, index, state }) {
+      emit('turn_text', {
+        callId, turn: index,
+        speaker, text, action,
+        currentOffer: state.current_offer,
+      });
+    },
+  });
+  console.log(`[CALL ${callId}] Negotiation: ${negotiationState.turn_count} turns → ₹${negotiationState.final_price} (${negotiationState.resolution_reason})`);
+
+  emit('call_preparing', { callId, message: 'Generating voice audio...' });
+  const audioResults = await mapLimit(
+    negotiationState.conversation,
+    ttsConcurrency(),
+    (t, i) => generateAudio(t.text, t.speaker, i, callId, t.action)
+  );
+
+  callState.negotiationState = negotiationState;
+  callState.audioFiles = negotiationState.conversation.map((t, i) => ({
+    turn: i, speaker: t.speaker, text: t.text, action: t.action,
+    file: audioResults[i],
+  }));
+
+  const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+  const placedCall = await twilioClient.calls.create({
+    to: toNumber,
+    from: process.env.TWILIO_RINGSIDE_NUMBER,
+    url: `${ngrok}/twiml/start?callId=${callId}`,
+    method: 'POST',
+    statusCallback: `${ngrok}/api/call-status?callId=${callId}`,
+    statusCallbackMethod: 'POST',
+    timeout: 30,
+  });
+
+  callState.twilioCallSid = placedCall.sid;
+  callState.status = 'ringing';
+  callSidToId[placedCall.sid] = callId;
+  emit('call_placed', { callId, callSid: placedCall.sid });
+  console.log(`[CALL ${callId}] Twilio call placed: ${placedCall.sid}`);
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function handleDemoCall(callId, config) {
+  const callState = activeCalls[callId];
+  callState.status = 'connecting';
+  emit('call_preparing', { callId, message: 'Starting local demo negotiation' });
+  await wait(220);
+  callState.status = 'live';
+  emit('call_answered', { callId, transport: 'demo' });
+  const result = await runNegotiation(config, {
+    onTurn: async ({ speaker, action, text, index, state }) => {
+      callState.currentTurn = index;
+      callState.negotiationState = state;
+      await persistCall(callState);
+      emit('turn_playing', { callId, turn: index, speaker, text, action, currentOffer: state.current_offer });
+      await wait(260);
+    },
+  });
+  callState.negotiationState = result;
+  callState.currentTurn = result.conversation.length - 1;
+  callState.status = result.resolved ? 'resolved' : 'complete';
+  emit('call_resolved', {
+    callId,
+    finalPrice: result.final_price,
+    savings: config.currentPrice - (result.final_price || config.currentPrice),
+    savingsAnnual: (config.currentPrice - (result.final_price || config.currentPrice)) * 12,
+    resolutionReason: result.resolution_reason,
+    report: buildReport(callState, callState.research, callState.bill),
+  });
+  finalizeCall(callId, 'resolved');
+}
+
+// ── HUMAN MODE ─────────────────────────────────────────────────────────────────
+async function handleHumanCall(callId, config) {
+  const ngrok = publicBaseUrl();
+  const callState = activeCalls[callId];
   emit('call_preparing', { callId, message: 'Placing call...' });
 
-  try {
-    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-    const call = await twilioClient.calls.create({
-      to: config.phone,
-      from: process.env.TWILIO_RINGSIDE_NUMBER,
-      url: `${ngrok}/twiml/human-start?callId=${callId}`,
-      method: 'POST',
-      statusCallback: `${ngrok}/api/call-status?callId=${callId}`,
-      statusCallbackMethod: 'POST',
-      timeout: 30,
-    });
+  const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+  const placedCall = await twilioClient.calls.create({
+    to: config.phone,
+    from: process.env.TWILIO_RINGSIDE_NUMBER,
+    url: `${ngrok}/twiml/human-start?callId=${callId}`,
+    method: 'POST',
+    statusCallback: `${ngrok}/api/call-status?callId=${callId}`,
+    statusCallbackMethod: 'POST',
+    timeout: 30,
+  });
 
-    activeCalls[callId].twilioCallSid = call.sid;
-    callSidToId[call.sid] = callId;
-    emit('call_placed', { callId, callSid: call.sid });
-    console.log(`[CALL ${callId}] Human call placed: ${call.sid}`);
-
-    res.json({ success: true, callId, callSid: call.sid, mode: 'human' });
-  } catch (err) {
-    console.error(`[CALL ${callId}] Human mode error:`, err.message);
-    emit('call_error', { callId, error: err.message });
-    res.status(500).json({ error: err.message });
-  }
+  callState.twilioCallSid = placedCall.sid;
+  callState.status = 'ringing';
+  callSidToId[placedCall.sid] = callId;
+  emit('call_placed', { callId, callSid: placedCall.sid });
+  console.log(`[CALL ${callId}] Human call placed: ${placedCall.sid}`);
 }
 
 // ── TWIML: AGENT — CALL START ──────────────────────────────────────────────────
-app.post('/twiml/start', (req, res) => {
+app.post('/twiml/start', requireTwilioSignature, (req, res) => {
   const { callId } = req.query;
   const call = activeCalls[callId];
   if (!call) return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<Response><Say>System error. Goodbye.</Say><Hangup/></Response>`);
+  if (!verifyCallSid(req, call)) return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>`);
 
   emit('call_answered', { callId });
   console.log(`[TWIML] ${callId} answered — starting agent turn loop`);
 
-  const ngrok = process.env.NGROK_URL;
+  const ngrok = publicBaseUrl();
   res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Redirect method="POST">${ngrok}/twiml/turn?callId=${callId}&amp;n=0</Redirect>
@@ -256,11 +533,15 @@ app.post('/twiml/start', (req, res) => {
 });
 
 // ── TWIML: AGENT — TURN LOOP ───────────────────────────────────────────────────
-app.post('/twiml/turn', (req, res) => {
+app.post('/twiml/turn', requireTwilioSignature, (req, res) => {
   const { callId } = req.query;
   const n    = parseInt(req.query.n, 10);
   const call = activeCalls[callId];
   if (!call) return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>`);
+  if (!verifyCallSid(req, call)) return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>`);
+  if (!Number.isInteger(n) || n < 0 || n > 30) {
+    return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>`);
+  }
 
   const audioFile = call.audioFiles[n];
 
@@ -273,6 +554,7 @@ app.post('/twiml/turn', (req, res) => {
       savingsAnnual: (call.config.currentPrice - (call.negotiationState.final_price || call.config.currentPrice)) * 12,
       resolutionReason: call.negotiationState.resolution_reason,
     });
+    finalizeCall(callId, 'resolved');
     return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Pause length="2"/>
@@ -281,10 +563,9 @@ app.post('/twiml/turn', (req, res) => {
   }
 
   call.currentTurn = n;
-  const ngrok    = process.env.NGROK_URL;
   const isLast   = n === call.audioFiles.length - 1;
-  const audioUrl = audioFile.file ? `${ngrok}/audio/${audioFile.file}` : null;
-  const nextUrl  = isLast ? null : `${ngrok}/twiml/turn?callId=${callId}&n=${n + 1}`;
+  const audioUrl = callAudioUrl(call, audioFile.file);
+  const nextUrl  = isLast ? null : `${publicBaseUrl()}/twiml/turn?callId=${callId}&n=${n + 1}`;
 
   emit('turn_playing', {
     callId, turn: n,
@@ -297,7 +578,7 @@ app.post('/twiml/turn', (req, res) => {
 });
 
 // ── TWIML: AGENT — REP AUTO-ANSWER ────────────────────────────────────────────
-app.post('/twiml/rep-answer', (req, res) => {
+app.post('/twiml/rep-answer', requireTwilioSignature, (req, res) => {
   res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Pause length="120"/>
@@ -305,10 +586,11 @@ app.post('/twiml/rep-answer', (req, res) => {
 });
 
 // ── TWIML: HUMAN — CALL START ─────────────────────────────────────────────────
-app.post('/twiml/human-start', async (req, res) => {
+app.post('/twiml/human-start', requireTwilioSignature, async (req, res) => {
   const { callId } = req.query;
   const call = activeCalls[callId];
   if (!call) return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>`);
+  if (!verifyCallSid(req, call)) return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>`);
 
   emit('call_answered', { callId });
   console.log(`[TWIML] ${callId} human call answered — generating opening`);
@@ -328,8 +610,8 @@ app.post('/twiml/human-start', async (req, res) => {
       currentOffer: call.negotiationState.current_offer,
     });
 
-    const ngrok    = process.env.NGROK_URL;
-    const audioUrl = audioFile ? `${ngrok}/audio/${audioFile}` : null;
+    const ngrok    = publicBaseUrl();
+    const audioUrl = callAudioUrl(call, audioFile);
     const media    = audioUrl ? `<Play>${audioUrl}</Play>` : `<Say>${escapeXml(result.text)}</Say>`;
 
     res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -350,91 +632,71 @@ app.post('/twiml/human-start', async (req, res) => {
 });
 
 // ── TWIML: HUMAN — GATHER (each rep response) ─────────────────────────────────
-app.post('/twiml/human-gather', async (req, res) => {
+app.post('/twiml/human-gather', requireTwilioSignature, async (req, res) => {
   const { callId } = req.query;
   const call = activeCalls[callId];
   if (!call) return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>`);
+  if (!verifyCallSid(req, call)) return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>`);
 
-  const speechText = (req.body.SpeechResult || '').trim();
-  const ngrok      = process.env.NGROK_URL;
+  const speechText = policy.truncate(req.body.SpeechResult || req.query.SpeechResult || '', 400);
+  const ngrok      = publicBaseUrl();
   console.log(`[TWIML] human-gather: "${speechText.substring(0, 80)}"`);
 
-  // Record rep's human speech
-  const repTurnN = call.audioFiles.length;
-  let repOffer   = null;
-
-  if (speechText) {
-    repOffer = await extractOfferFromSpeech(speechText, call.config);
-    if (repOffer !== null) {
-      call.negotiationState.current_offer = repOffer;
-      call.negotiationState.rep_offers_used = [...call.negotiationState.rep_offers_used, repOffer];
-    }
-    call.negotiationState.conversation.push({
-      speaker: 'rep', text: speechText, action: 'human_speech',
-      currentOffer: repOffer || call.negotiationState.current_offer,
-    });
-    call.negotiationState.turn_count++;
-
-    emit('turn_playing', {
-      callId, turn: repTurnN, speaker: 'rep',
-      text: speechText, action: 'human_speech',
-      currentOffer: call.negotiationState.current_offer,
-    });
-  }
-
-  // Should Ringside accept?
-  const cfg = call.config;
-  if (repOffer !== null && repOffer <= cfg.acceptThreshold) {
-    call.negotiationState.resolved         = true;
-    call.negotiationState.final_price      = repOffer;
-    call.negotiationState.resolution_reason = 'accepted';
-  }
-
-  const budgetHit = call.negotiationState.turn_count >= cfg.maxTurns;
-  const shouldClose = call.negotiationState.resolved || budgetHit;
-
-  // Generate Ringside's response
-  const nextAction = shouldClose
-    ? (call.negotiationState.resolved ? 'accept' : 'best_offer')
-    : null; // let runRingsideTurn determine it
-
   try {
-    const result = await runRingsideTurn(call.negotiationState);
-    call.negotiationState = result.state;
+    const response = await enqueueCallWork(call, async () => {
+      const repTurnN = call.audioFiles.length;
 
-    const rTurnN    = call.audioFiles.length;
-    const audioFile = await generateAudio(result.text, 'ringside', rTurnN, callId, result.action);
-    call.audioFiles.push({ turn: rTurnN, speaker: 'ringside', text: result.text, action: result.action, file: audioFile });
-    call.currentTurn = rTurnN;
+      if (speechText) {
+        const repOffer = await extractOfferFromSpeech(speechText, call.config);
+        call.negotiationState = ingestHumanSpeech(call.negotiationState, speechText, repOffer);
 
-    emit('turn_playing', {
-      callId, turn: rTurnN, speaker: 'ringside',
-      text: result.text, action: result.action,
-      currentOffer: call.negotiationState.current_offer,
-    });
+        const lastRepTurn = call.negotiationState.conversation[call.negotiationState.conversation.length - 1];
+        emit('turn_playing', {
+          callId, turn: repTurnN, speaker: 'rep',
+          text: lastRepTurn.redacted ? '[Filtered non-negotiation content]' : speechText,
+          action: 'human_speech',
+          currentOffer: call.negotiationState.current_offer,
+        });
+      }
 
-    const audioUrl = audioFile ? `${ngrok}/audio/${audioFile}` : null;
-    const media    = audioUrl ? `<Play>${audioUrl}</Play>` : `<Say>${escapeXml(result.text)}</Say>`;
+      const budgetHit = call.negotiationState.turn_count >= call.config.maxTurns;
+      const forcedAction = budgetHit && !call.negotiationState.resolved ? 'best_offer' : null;
+      const result = await runRingsideTurn(call.negotiationState, forcedAction);
+      call.negotiationState = result.state;
 
-    if (call.negotiationState.resolved) {
-      emit('call_resolved', {
-        callId,
-        finalPrice:    call.negotiationState.final_price,
-        savings:       cfg.currentPrice - (call.negotiationState.final_price || cfg.currentPrice),
-        savingsAnnual: (cfg.currentPrice - (call.negotiationState.final_price || cfg.currentPrice)) * 12,
-        resolutionReason: call.negotiationState.resolution_reason,
+      const rTurnN    = call.audioFiles.length;
+      const audioFile = await generateAudio(result.text, 'ringside', rTurnN, callId, result.action);
+      call.audioFiles.push({ turn: rTurnN, speaker: 'ringside', text: result.text, action: result.action, file: audioFile });
+      call.currentTurn = rTurnN;
+
+      emit('turn_playing', {
+        callId, turn: rTurnN, speaker: 'ringside',
+        text: result.text, action: result.action,
+        currentOffer: call.negotiationState.current_offer,
       });
-      return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
+
+      const audioUrl = callAudioUrl(call, audioFile);
+      const media    = audioUrl ? `<Play>${audioUrl}</Play>` : `<Say>${escapeXml(result.text)}</Say>`;
+
+      if (call.negotiationState.resolved) {
+        emit('call_resolved', {
+          callId,
+          finalPrice:    call.negotiationState.final_price,
+          savings:       call.config.currentPrice - (call.negotiationState.final_price || call.config.currentPrice),
+          savingsAnnual: (call.config.currentPrice - (call.negotiationState.final_price || call.config.currentPrice)) * 12,
+          resolutionReason: call.negotiationState.resolution_reason,
+        });
+        finalizeCall(callId, 'resolved');
+        return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Pause length="1"/>
   ${media}
   <Pause length="2"/>
   <Hangup/>
-</Response>`);
-    }
+</Response>`;
+      }
 
-    // Continue negotiation
-    res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
+      return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Pause length="1"/>
   ${media}
@@ -443,7 +705,9 @@ app.post('/twiml/human-gather', async (req, res) => {
     <Pause length="1"/>
   </Gather>
   <Redirect method="POST">${ngrok}/twiml/human-gather?callId=${callId}&amp;SpeechResult=</Redirect>
-</Response>`);
+</Response>`;
+    });
+    return res.type('text/xml').send(response);
   } catch (err) {
     console.error(`[TWIML] human-gather error:`, err.message);
     res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -452,28 +716,75 @@ app.post('/twiml/human-gather', async (req, res) => {
 });
 
 // ── STATUS CALLBACK ────────────────────────────────────────────────────────────
-app.post('/api/call-status', (req, res) => {
+app.post('/api/call-status', requireTwilioSignature, (req, res) => {
   const { CallStatus, CallSid } = req.body;
   const callId = req.query.callId || callSidToId[CallSid];
   console.log(`[STATUS] ${CallSid} → ${CallStatus}`);
+  const call = activeCalls[callId];
+  if (call && !verifyCallSid(req, call)) return res.sendStatus(403);
 
   if (['completed', 'failed', 'no-answer', 'busy', 'canceled'].includes(CallStatus)) {
-    const call = activeCalls[callId];
     if (call) {
       emit('call_ended', {
         callId, status: CallStatus,
         finalPrice: call.negotiationState?.final_price,
         savings: call.config.currentPrice - (call.negotiationState?.final_price || call.config.currentPrice),
       });
+      finalizeCall(callId, CallStatus);
     }
   }
   res.sendStatus(200);
 });
 
 // ── DATA ENDPOINTS ─────────────────────────────────────────────────────────────
-app.post('/api/negotiate', async (req, res) => {
+app.post('/api/bills/upload', upload.single('bill'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Upload a PDF, PNG, JPG, JPEG, TXT, or Markdown bill' });
   try {
-    const config = deriveConfig({ ...DEFAULT_CONFIG, ...req.body });
+    const text = extractTextFromFile(req.file.path, req.file.originalname);
+    const bill = extractBillData(text, req.file.originalname);
+    bill.billId = uuid();
+    if (req.user) await persistence.upsertBill({ ...bill, userId: req.user.id, extractedText: text });
+    fs.unlink(req.file.path, () => {});
+    return res.status(text ? 200 : 422).json({
+      success: Boolean(text),
+      bill: sanitizeBillForClient(bill),
+      message: text ? 'Bill analyzed' : 'We could not read this document. Enter the bill manually or retry with a clearer file.',
+    });
+  } catch (err) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(422).json({ error: 'Bill processing failed', detail: isProduction ? undefined : err.message });
+  }
+});
+
+app.post('/api/bills/extract', async (req, res) => {
+  const text = policy.truncate(req.body?.text || '', 20_000);
+  if (!text) return res.status(400).json({ error: 'Bill text is required' });
+  const bill = extractBillData(text, req.body.filename || 'manual.txt');
+  if (req.user) await persistence.upsertBill({ ...bill, userId: req.user.id, extractedText: text });
+  res.json({ success: true, bill: sanitizeBillForClient(bill) });
+});
+
+app.post('/api/research', (req, res) => {
+  const { company, notes, bill, targetPrice } = req.body || {};
+  res.json({ success: true, research: buildResearchContext({ company, notes, bill, targetPrice }) });
+});
+
+app.post('/api/rag/search', (req, res) => {
+  const query = policy.truncate(req.body?.query || '', 500);
+  if (!query) return res.status(400).json({ error: 'Search query is required' });
+  res.json({ results: searchKnowledge(query, req.body?.filters || {}, req.body?.limit || 6) });
+});
+
+app.post('/api/negotiations', requireUser, (req, res) => {
+  req.body = { ...req.body, mode: req.body?.mode || 'agent', transport: 'demo' };
+  return startCall(req, res);
+});
+
+app.post('/api/negotiate', requireApiAccess, async (req, res) => {
+  try {
+    const parsed = validateStartBody({ ...req.body, mode: 'agent' });
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    const config = parsed.config;
     const state  = await runNegotiation(config);
     res.json({ success: true, state });
   } catch (err) {
@@ -481,9 +792,33 @@ app.post('/api/negotiate', async (req, res) => {
   }
 });
 
-app.get('/api/state/:callId', (req, res) => {
+app.get('/api/state/:callId', requireUser, async (req, res) => {
   const call = activeCalls[req.params.callId];
-  if (!call) return res.status(404).json({ error: 'Call not found' });
+  if (!call) {
+    const persisted = await persistence.getNegotiation(req.params.callId, req.user.id);
+    if (!persisted) return res.status(404).json({ error: 'Call not found' });
+    const state = persisted.negotiationState || {};
+    return res.json({
+      callId: persisted.callId,
+      config: persisted.config,
+      mode: persisted.config?.mode,
+      startedAt: persisted.startedAt,
+      endedAt: persisted.endedAt,
+      status: persisted.status,
+      currentTurn: persisted.currentTurn,
+      totalTurns: state.conversation?.length || 0,
+      resolved: state.resolved,
+      finalPrice: state.final_price,
+      resolutionReason: state.resolution_reason,
+      conversation: state.conversation || [],
+      report: persisted.report,
+      research: persisted.research,
+      bill: persisted.bill,
+    });
+  }
+  if (!hasApiAccess(req) && !ownsCall(req, call)) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
 
   const fullConvo = call.negotiationState?.conversation || [];
   const resolved  = call.negotiationState?.resolved;
@@ -499,20 +834,31 @@ app.get('/api/state/:callId', (req, res) => {
 
   res.json({
     callId:      call.callId,
-    config:      call.config,
+    config:      {
+      company: call.config.company,
+      currentPrice: call.config.currentPrice,
+      targetPrice: call.config.targetPrice,
+      mode: call.config.mode,
+    },
     mode:        call.config.mode,
     startedAt:   call.startedAt,
+    endedAt:     call.endedAt,
+    status:      call.status,
     currentTurn: call.currentTurn,
-    totalTurns:  call.audioFiles.length,
+      totalTurns:  call.audioFiles.length || fullConvo.length,
     resolved,
     finalPrice:  call.negotiationState?.final_price,
     resolutionReason: call.negotiationState?.resolution_reason,
     conversation: enrichedConvo,
+    report: call.report || (call.endedAt ? buildReport(call, call.research, call.bill) : null),
+    research: call.research,
+    bill: call.bill ? sanitizeBillForClient(call.bill) : null,
   });
 });
 
-app.get('/api/calls', (req, res) => {
-  const calls = Object.values(activeCalls)
+app.get('/api/calls', requireUser, async (req, res) => {
+  const active = Object.values(activeCalls)
+    .filter((c) => hasApiAccess(req) || ownsCall(req, c))
     .sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt))
     .map((c) => ({
       callId:       c.callId,
@@ -522,12 +868,71 @@ app.get('/api/calls', (req, res) => {
       targetPrice:  c.config?.targetPrice,
       startedAt:    c.startedAt,
       currentTurn:  c.currentTurn,
-      totalTurns:   c.audioFiles?.length,
+      totalTurns:   c.audioFiles?.length || c.negotiationState?.conversation?.length || 0,
       resolved:     c.negotiationState?.resolved,
       finalPrice:   c.negotiationState?.final_price,
       resolutionReason: c.negotiationState?.resolution_reason,
+      report: c.report,
     }));
-  res.json(calls);
+  const activeIds = new Set(active.map((call) => call.callId));
+  const persisted = (await persistence.listNegotiations(req.user.id))
+    .filter((c) => !activeIds.has(c.callId))
+    .map((c) => ({
+      callId: c.callId,
+      company: c.config?.company,
+      mode: c.config?.mode,
+      currentPrice: c.config?.currentPrice,
+      targetPrice: c.config?.targetPrice,
+      startedAt: c.startedAt,
+      currentTurn: c.currentTurn,
+      totalTurns: c.negotiationState?.conversation?.length || 0,
+      resolved: c.negotiationState?.resolved,
+      finalPrice: c.negotiationState?.final_price,
+      resolutionReason: c.negotiationState?.resolution_reason,
+      report: c.report,
+    }));
+  res.json([...active, ...persisted].sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt)));
+});
+
+app.get('/api/negotiations/:callId', requireUser, async (req, res) => {
+  const persisted = activeCalls[req.params.callId] || await persistence.getNegotiation(req.params.callId, req.user.id);
+  if (!persisted) return res.status(404).json({ error: 'Negotiation not found' });
+  if (!hasApiAccess(req) && !ownsCall(req, persisted)) return res.status(403).json({ error: 'Unauthorized' });
+  if (activeCalls[req.params.callId]) return res.redirect(307, `/api/state/${req.params.callId}`);
+  const { userId, clientToken, audioToken, ...safeRecord } = persisted;
+  res.json(safeRecord);
+});
+
+app.post('/api/verify-offer', requireUser, (req, res) => {
+  const { finalPrice, targetPrice, currentPrice, conditions } = req.body || {};
+  res.json({ verification: verifyFinalOffer({ finalPrice, targetPrice, currentPrice, conditions }) });
+});
+
+app.post('/api/call/:callId/pause', requireUser, async (req, res) => {
+  if (!await canAccessCall(req, req.params.callId)) return res.status(403).json({ error: 'Unauthorized' });
+  const call = activeCalls[req.params.callId];
+  if (!call) return res.status(409).json({ error: 'Call is no longer active' });
+  call.status = 'paused';
+  emit('call_paused', { callId: call.callId });
+  res.json({ success: true, status: call.status });
+});
+
+app.post('/api/call/:callId/resume', requireUser, async (req, res) => {
+  if (!await canAccessCall(req, req.params.callId)) return res.status(403).json({ error: 'Unauthorized' });
+  const call = activeCalls[req.params.callId];
+  if (!call) return res.status(409).json({ error: 'Call is no longer active' });
+  call.status = 'live';
+  emit('call_resumed', { callId: call.callId });
+  res.json({ success: true, status: call.status });
+});
+
+app.post('/api/call/:callId/end', requireUser, async (req, res) => {
+  if (!await canAccessCall(req, req.params.callId)) return res.status(403).json({ error: 'Unauthorized' });
+  const call = activeCalls[req.params.callId];
+  if (!call) return res.json({ success: true, status: 'ended' });
+  finalizeCall(call.callId, 'ended');
+  emit('call_ended', { callId: call.callId, status: 'ended' });
+  res.json({ success: true, status: call.status });
 });
 
 // ── PAGE ROUTES ────────────────────────────────────────────────────────────────
@@ -543,15 +948,29 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+app.use((error, _req, res, next) => {
+  if (res.headersSent) return next(error);
+  console.error('[HTTP]', error.message);
+  return res.status(error.status || 500).json({ error: 'Request could not be completed' });
+});
+
 // ── BOOT ───────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, async () => {
-  console.log(`\n🥊 Ringside server on http://localhost:${PORT}`);
+async function boot() {
+  if (isProduction && !persistence.usingNeon()) {
+    throw new Error('DATABASE_URL (Neon Postgres) is required in production');
+  }
+  if (isProduction && !googleAuthConfigured()) {
+    throw new Error('Google OAuth configuration is required in production');
+  }
+  await persistence.init();
+  await ensureAudioDir();
+
+  app.listen(PORT, () => {
+  console.log(`\nRingside server on http://localhost:${PORT}`);
   console.log(`   NGROK_URL:  ${process.env.NGROK_URL || '(not set)'}`);
   console.log(`   From:       ${process.env.TWILIO_RINGSIDE_NUMBER || '(not set)'}`);
   console.log(`   Rep number: ${process.env.TWILIO_REP_NUMBER || '(not set, pass phone in request)'}\n`);
-
-  await ensureAudioDir();
 
   if (process.env.MAYA_API_KEY && process.env.RINGSIDE_VOICE_ID && process.env.REP_VOICE_ID) {
     generateFallbackCache().catch((err) =>
@@ -560,4 +979,10 @@ app.listen(PORT, async () => {
   } else {
     console.warn('[TTS] MAYA_API_KEY or voice IDs not set — skipping cache generation');
   }
+  });
+}
+
+boot().catch((error) => {
+  console.error(`[BOOT] ${error.message}`);
+  process.exit(1);
 });

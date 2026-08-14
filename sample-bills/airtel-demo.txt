@@ -1,0 +1,10 @@
+Provider: Airtel
+Plan: Xstream Fiber 500 Mbps
+Account number: IN-AIRTEL-4829
+Invoice number: INV-2026-0813
+Monthly bill: ₹1499
+Speed: 500 Mbps
+Customer tenure: 3 years
+Contract status: no contract
+Comparable market offer: ₹999 per month for a similar 500 Mbps plan.
+Retention context: ask whether a loyalty adjustment or promotional rate is available.
